@@ -1,14 +1,26 @@
+import { APP_DEPARTMENTS, MOCK_ACCOUNTS } from '../data/seedData';
 import type {
+  ActivityLogItem,
+  ActivityType,
   BusinessOrder,
-  BusinessService,
-  DailyRevenue,
-  ImportSummary,
+  CheckInRecord,
+  CompanyNotification,
+  MockAccount,
+  NotificationAudience,
+  NotificationPriority,
   OrderStatus,
-  PaymentMethodShare,
   StatCardData,
 } from '../types/business';
 
-const VALID_STATUSES: OrderStatus[] = ['DELIVERING', 'PENDING', 'COMPLETED', 'CANCELLED'];
+const VALID_STATUSES: OrderStatus[] = ['PENDING', 'DELIVERING', 'COMPLETED', 'CANCELLED'];
+
+const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
+  CHECK_IN: 'Chấm công GPS',
+  ORDER_CREATED: 'Tạo đầu việc',
+  STATUS_UPDATED: 'Cập nhật tiến độ',
+  NOTIFICATION_SENT: 'Gửi thông báo',
+  SYSTEM: 'Hệ thống',
+};
 
 export function normalizeOrderStatus(raw?: string): OrderStatus {
   const upper = (raw ?? 'PENDING').trim().toUpperCase() as OrderStatus;
@@ -20,44 +32,62 @@ export function formatVnd(amount: number): string {
   return `${new Intl.NumberFormat('vi-VN').format(safe)} ₫`;
 }
 
-export function computeStatsFromOrders(orders: BusinessOrder[]): StatCardData[] {
-  const total = orders.length;
-  const active = orders.filter((o) => o.status === 'DELIVERING').length;
+export function formatTimeShort(timestampMillis = Date.now()): string {
+  const d = new Date(timestampMillis);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+export function getTodayDateKey(timestampMillis = Date.now()): string {
+  const d = new Date(timestampMillis);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function computeOperationalStats(orders: BusinessOrder[]): StatCardData[] {
   const pending = orders.filter((o) => o.status === 'PENDING').length;
+  const active = orders.filter((o) => o.status === 'DELIVERING').length;
   const completed = orders.filter((o) => o.status === 'COMPLETED').length;
-  const cancelled = orders.filter((o) => o.status === 'CANCELLED').length;
-  const successRate = total > 0 ? Math.round((completed * 100) / total) : 100;
 
   return [
     {
-      title: 'Tổng dự án & việc',
-      count: String(total),
-      subtitle: 'hạng mục trong DB',
-      trend: '+14.8%',
-      isPositive: true,
+      key: 'pending',
+      title: 'Chờ duyệt ngay',
+      count: String(pending),
+      subtitle: pending > 0 ? 'Cần xử lý trên app' : 'Không còn tồn đọng',
     },
     {
+      key: 'active',
       title: 'Đang triển khai',
-      count: String(active + pending),
-      subtitle: `${pending} chờ phê duyệt`,
-      trend: 'Đúng hạn',
-      isPositive: true,
+      count: String(active),
+      subtitle: 'Đang theo dõi tiến độ',
     },
     {
-      title: 'Đã nghiệm thu',
+      key: 'completed',
+      title: 'Đã hoàn tất',
       count: String(completed),
-      subtitle: `hoàn tất ${successRate}%`,
-      trend: '+12.4%',
-      isPositive: true,
-    },
-    {
-      title: 'Tạm dừng / Quá hạn',
-      count: String(cancelled),
-      subtitle: 'cần rà soát',
-      trend: '-2.1%',
-      isPositive: false,
+      subtitle: `Tổng ${orders.length} đầu việc`,
     },
   ];
+}
+
+export function getNextWorkflowAction(status: OrderStatus): {
+  label: string;
+  nextStatus: OrderStatus;
+} {
+  switch (status) {
+    case 'PENDING':
+      return { label: 'Duyệt triển khai', nextStatus: 'DELIVERING' };
+    case 'DELIVERING':
+      return { label: 'Xác nhận hoàn tất', nextStatus: 'COMPLETED' };
+    case 'COMPLETED':
+      return { label: 'Mở lại việc', nextStatus: 'DELIVERING' };
+    case 'CANCELLED':
+      return { label: 'Đưa về chờ duyệt', nextStatus: 'PENDING' };
+  }
 }
 
 export function filterOrders(
@@ -75,75 +105,51 @@ export function filterOrders(
       order.senderName.toLowerCase().includes(q) ||
       order.senderAddress.toLowerCase().includes(q) ||
       order.recipientName.toLowerCase().includes(q) ||
-      order.recipientAddress.toLowerCase().includes(q) ||
-      order.serviceType.toLowerCase().includes(q)
+      order.recipientAddress.toLowerCase().includes(q)
     );
   });
 }
 
-export function filterServices(services: BusinessService[], searchQuery: string): BusinessService[] {
-  const q = searchQuery.trim().toLowerCase();
-  if (!q) return services;
-  return services.filter(
-    (s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q) ||
-      s.deliveryTime.toLowerCase().includes(q) ||
-      (s.popularTag?.toLowerCase().includes(q) ?? false)
-  );
-}
-
-export function calculateBudgetEstimate(basePriceVnd: number, manDays: number) {
-  const safeDays = Math.max(1, manDays);
-  const estimatedBudget = Math.round(basePriceVnd * (0.5 + safeDays * 0.1));
-  const reserveFund = Math.round(estimatedBudget * 0.15);
-  const totalApproved = Math.max(0, estimatedBudget - reserveFund);
-  const operatingFee = Math.round(estimatedBudget * 0.12);
-  return { estimatedBudget, reserveFund, totalApproved, operatingFee };
-}
-
-export function buildNewOrder(params: {
-  recipientName: string;
-  recipientAddress: string;
-  weightKg: number;
+export function buildQuickTask(params: {
+  title: string;
+  assignee: string;
   departmentCode: string;
-  service: BusinessService;
+  branchName?: string;
+  budgetVnd?: number;
   now?: number;
   randomCode?: number;
 }): BusinessOrder {
   const now = params.now ?? Date.now();
   const code = params.randomCode ?? Math.floor(10000 + Math.random() * 90000);
-  const departmentMap: Record<string, string> = {
-    TECH: 'Phòng Kỹ Thuật & R&D',
-    MKT: 'Phòng Marketing & Truyền Thông',
-    FIN: 'Phòng Tài Chính - Kế Toán',
-    B2B: 'Phòng Kinh Doanh B2B',
-  };
-  const department = departmentMap[params.departmentCode] ?? 'Phòng Kinh Doanh B2B';
-  const { estimatedBudget, operatingFee } = calculateBudgetEstimate(
-    params.service.basePriceVnd,
-    params.weightKg
-  );
+  const dept =
+    APP_DEPARTMENTS.find((d) => d.code === params.departmentCode) ?? APP_DEPARTMENTS[0];
+  const branch = params.branchName?.trim() || 'Trụ sở Hà Nội';
+  const safeBudget = Number.isFinite(params.budgetVnd) && (params.budgetVnd ?? 0) > 0
+    ? Math.round(params.budgetVnd!)
+    : 0;
 
   return {
     id: `ORD-${now % 100000}-${code % 100}`,
-    trackingNumber: `PRJ-${code}-BM`,
-    senderName: department,
-    senderAddress: params.recipientAddress.trim() || 'Dự án Triển khai Giải pháp Doanh nghiệp',
-    recipientName: params.recipientName.trim() || 'Khách Hàng Mới',
-    recipientAddress: `Trụ sở Chính • Quy mô ${Math.round(params.weightKg)} ngày công • Ưu tiên Cao`,
+    trackingNumber: `${dept.code}-${code}`,
+    senderName: dept.fullName,
+    senderAddress: params.title.trim(),
+    recipientName: params.assignee.trim(),
+    recipientAddress: `${branch} · Tạo nhanh trên app`,
     status: 'PENDING',
-    serviceType: department.replace('Phòng ', ''),
-    feeVnd: operatingFee,
-    codVnd: estimatedBudget,
-    createdAt: 'Vừa khởi tạo',
-    estimatedDelivery: 'Hạn duyệt hôm nay',
-    weightKg: params.weightKg,
+    serviceType: dept.label,
+    feeVnd: 0,
+    codVnd: safeBudget,
+    createdAt: `${formatTimeShort(now)} · Hôm nay`,
+    estimatedDelivery: 'Chờ duyệt nhanh',
+    weightKg: 1,
     timestampMillis: now,
   };
 }
 
-export function mergeOrdersUpsert(existing: BusinessOrder[], incoming: BusinessOrder[]): BusinessOrder[] {
+export function mergeOrdersUpsert(
+  existing: BusinessOrder[],
+  incoming: BusinessOrder[]
+): BusinessOrder[] {
   const map = new Map<string, BusinessOrder>();
   for (const item of existing) {
     map.set(item.id, item);
@@ -156,230 +162,219 @@ export function mergeOrdersUpsert(existing: BusinessOrder[], incoming: BusinessO
   );
 }
 
-function parseJsonOrder(obj: Record<string, unknown>, baseTimestamp: number, index: number, total: number): BusinessOrder {
-  const trackingNumber =
-    typeof obj.trackingNumber === 'string' && obj.trackingNumber.trim()
-      ? obj.trackingNumber.trim()
-      : `VN-${Math.floor(10000 + Math.random() * 90000)}-DB`;
-  const id = typeof obj.id === 'string' && obj.id.trim() ? obj.id.trim() : `ORD-${trackingNumber}`;
-  return {
-    id,
-    trackingNumber,
-    senderName: String(obj.senderName ?? 'Alex Nguyễn'),
-    senderAddress: String(obj.senderAddress ?? '120 Hoàng Hoa Thám, Ba Đình, Hà Nội'),
-    recipientName: String(obj.recipientName ?? 'Khách hàng GoShip'),
-    recipientAddress: String(obj.recipientAddress ?? 'Quận 1, TP. Hồ Chí Minh'),
-    status: normalizeOrderStatus(String(obj.status ?? obj.statusName ?? 'PENDING')),
-    serviceType: String(obj.serviceType ?? 'Hỏa tốc 2H'),
-    feeVnd: Number(obj.feeVnd ?? 45000),
-    codVnd: Number(obj.codVnd ?? 500000),
-    createdAt: String(obj.createdAt ?? 'Nhập từ Database'),
-    estimatedDelivery: String(obj.estimatedDelivery ?? 'Dự kiến hôm nay'),
-    weightKg: Number(obj.weightKg ?? 1.5),
-    timestampMillis: baseTimestamp + (total - index),
-  };
+export function escapeCsvCell(value: string | number | null | undefined): string {
+  const str = value == null ? '' : String(value);
+  if (/[",\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
 }
 
-export function parseImportJsonPayload(
-  jsonString: string,
-  now = Date.now()
-): {
+export interface DailyActivitiesReportInput {
+  activities: ActivityLogItem[];
   orders: BusinessOrder[];
-  services: BusinessService[];
-  revenues: DailyRevenue[];
-  paymentShares: PaymentMethodShare[];
-  summary: ImportSummary;
-} {
-  try {
-    const trimmed = jsonString.trim();
-    if (!trimmed) {
-      return {
-        orders: [],
-        services: [],
-        revenues: [],
-        paymentShares: [],
-        summary: {
-          ordersImported: 0,
-          servicesImported: 0,
-          revenuesImported: 0,
-          paymentSharesImported: 0,
-          errorMessage: 'Dữ liệu JSON trống.',
-        },
-      };
-    }
-    const parsed = JSON.parse(trimmed);
-    let orders: BusinessOrder[] = [];
-    let services: BusinessService[] = [];
-    let revenues: DailyRevenue[] = [];
-    let paymentShares: PaymentMethodShare[] = [];
+  activeBranch: string;
+  attendanceCount: number;
+  isCheckedInToday: boolean;
+  latestCheckIn?: CheckInRecord | null;
+  reportDate?: string;
+  includeBom?: boolean;
+}
 
-    if (Array.isArray(parsed)) {
-      orders = parsed.map((item, idx) =>
-        parseJsonOrder(item as Record<string, unknown>, now, idx, parsed.length)
-      );
-    } else if (parsed && typeof parsed === 'object') {
-      if (Array.isArray(parsed.orders)) {
-        orders = parsed.orders.map((item: Record<string, unknown>, idx: number) =>
-          parseJsonOrder(item, now, idx, parsed.orders.length)
-        );
-      }
-      if (Array.isArray(parsed.services)) {
-        services = parsed.services.map((item: Record<string, unknown>, idx: number) => ({
-          id: String(item.id ?? `SRV-IMP-${idx + 1}`),
-          name: String(item.name ?? 'Dịch vụ mới'),
-          description: String(item.description ?? 'Nhập từ JSON'),
-          basePriceVnd: Number(item.basePriceVnd ?? 25000),
-          deliveryTime: String(item.deliveryTime ?? 'Trong ngày'),
-          popularTag: typeof item.popularTag === 'string' ? item.popularTag : null,
-        }));
-      }
-      if (Array.isArray(parsed.revenues)) {
-        revenues = parsed.revenues.map((item: Record<string, unknown>, idx: number) => ({
-          dayIndex: Number(item.dayIndex ?? idx),
-          dayLabel: String(item.dayLabel ?? `D${idx + 1}`),
-          amountVnd: Number(item.amountVnd ?? 3000000),
-          orderCount: Number(item.orderCount ?? 15),
-          isPeak: Boolean(item.isPeak ?? false),
-        }));
-      }
-      if (Array.isArray(parsed.paymentShares)) {
-        paymentShares = parsed.paymentShares.map((item: Record<string, unknown>, idx: number) => ({
-          name: String(item.name ?? `Phương thức ${idx + 1}`),
-          percentage: Number(item.percentage ?? 30),
-          totalVnd: Number(item.totalVnd ?? 5000000),
-        }));
-      }
-    }
+export function generateDailyActivitiesCsvReport({
+  activities,
+  orders,
+  activeBranch,
+  attendanceCount,
+  isCheckedInToday,
+  latestCheckIn,
+  reportDate = getTodayDateKey(),
+  includeBom = true,
+}: DailyActivitiesReportInput): string {
+  const pendingCount = orders.filter((o) => o.status === 'PENDING').length;
+  const activeCount = orders.filter((o) => o.status === 'DELIVERING').length;
+  const completedCount = orders.filter((o) => o.status === 'COMPLETED').length;
+  const sortedActivities = [...activities].sort(
+    (a, b) => b.timestampMillis - a.timestampMillis
+  );
 
-    return {
-      orders,
-      services,
-      revenues,
-      paymentShares,
-      summary: {
-        ordersImported: orders.length,
-        servicesImported: services.length,
-        revenuesImported: revenues.length,
-        paymentSharesImported: paymentShares.length,
-      },
-    };
-  } catch (err) {
-    return {
-      orders: [],
-      services: [],
-      revenues: [],
-      paymentShares: [],
-      summary: {
-        ordersImported: 0,
-        servicesImported: 0,
-        revenuesImported: 0,
-        paymentSharesImported: 0,
-        errorMessage: `Lỗi định dạng JSON: ${err instanceof Error ? err.message : 'Không hợp lệ'}`,
-      },
-    };
+  const summaryRows: (string | number)[][] = [
+    ['BAO CAO TONG HOP HOAT DONG NGAY', 'Business Manage'],
+    ['Chi so', 'Gia tri'],
+    ['Ngay bao cao', reportDate],
+    ['Chi nhanh hoat dong', activeBranch],
+    [
+      'Trang thai cham cong GPS',
+      isCheckedInToday
+        ? `Da cham cong (${latestCheckIn?.checkedInAt ?? 'Hom nay'})`
+        : 'Chua cham cong',
+    ],
+    ['Quan so hien dien', `${attendanceCount}/130`],
+    ['Tong dau viec', orders.length],
+    ['Cho duyet', pendingCount],
+    ['Dang trien khai', activeCount],
+    ['Da hoan tat', completedCount],
+    ['Tong hoat dong ghi nhan', sortedActivities.length],
+  ];
+
+  const activityHeader = ['Ma hoat dong', 'Loai hoat dong', 'Thoi gian', 'Tieu de', 'Chi tiet'];
+  const activityRows = sortedActivities.map((item) => [
+    item.id,
+    ACTIVITY_TYPE_LABELS[item.type] ?? item.type,
+    item.timestamp,
+    item.title,
+    item.description,
+  ]);
+
+  const lines = [
+    ...summaryRows.map((row) => row.map(escapeCsvCell).join(',')),
+    '',
+    activityHeader.map(escapeCsvCell).join(','),
+    ...activityRows.map((row) => row.map(escapeCsvCell).join(',')),
+  ];
+
+  const csvBody = lines.join('\r\n');
+  return includeBom ? `\uFEFF${csvBody}` : csvBody;
+}
+
+export function getDailyActivitiesReportFilename(reportDate = getTodayDateKey()): string {
+  return `bao-cao-hoat-dong-${reportDate}.csv`;
+}
+
+export function downloadCsvFile(filename: string, csvContent: string): void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function isSupervisorAccount(account: Pick<MockAccount, 'role'>): boolean {
+  return account.role === 'SUPERVISOR';
+}
+
+export function canSendCompanyNotification(account: Pick<MockAccount, 'role'>): boolean {
+  return isSupervisorAccount(account);
+}
+
+export function canApproveOrderStatus(
+  account: Pick<MockAccount, 'role'>,
+  currentStatus: OrderStatus,
+  nextStatus: OrderStatus
+): boolean {
+  if (isSupervisorAccount(account)) return true;
+  // Subordinates can report active field work as completed, but cannot approve PENDING or cancel/reopen
+  return currentStatus === 'DELIVERING' && nextStatus === 'COMPLETED';
+}
+
+export function canDeleteOrders(account: Pick<MockAccount, 'role'>): boolean {
+  return isSupervisorAccount(account);
+}
+
+export function canExportEnterpriseReport(account: Pick<MockAccount, 'role'>): boolean {
+  return isSupervisorAccount(account);
+}
+
+export function getNotificationsForAccount(
+  notifications: CompanyNotification[],
+  account: MockAccount
+): CompanyNotification[] {
+  return [...notifications]
+    .filter((n) => {
+      if (account.role === 'SUPERVISOR') {
+        if (n.senderId === account.id) return true;
+        if (n.audience === 'SUPERVISORS' || n.audience === 'ALL_STAFF') return true;
+        if (n.audience === 'BRANCH') return n.targetBranch === account.branchName;
+        if (n.audience === 'INDIVIDUAL') return n.targetAccountId === account.id;
+        return true; // Supervisors also have visibility into subordinate announcements
+      }
+      switch (n.audience) {
+        case 'ALL_STAFF':
+        case 'SUBORDINATES':
+          return true;
+        case 'SUPERVISORS':
+          return false;
+        case 'BRANCH':
+          return n.targetBranch === account.branchName;
+        case 'INDIVIDUAL':
+          return n.targetAccountId === account.id;
+      }
+    })
+    .sort((a, b) => b.timestampMillis - a.timestampMillis);
+}
+
+export function isNotificationUnread(
+  notification: CompanyNotification,
+  accountId: string
+): boolean {
+  return !notification.readByAccountIds.includes(accountId);
+}
+
+export function getUnreadNotificationsCount(
+  notifications: CompanyNotification[],
+  account: MockAccount
+): number {
+  return getNotificationsForAccount(notifications, account).filter((n) =>
+    isNotificationUnread(n, account.id)
+  ).length;
+}
+
+export function getNotificationAudienceLabel(notification: Pick<
+  CompanyNotification,
+  'audience' | 'targetBranch' | 'targetAccountName'
+>): string {
+  switch (notification.audience) {
+    case 'ALL_STAFF':
+      return 'Toàn công ty';
+    case 'SUBORDINATES':
+      return 'Tất cả cấp dưới';
+    case 'SUPERVISORS':
+      return 'Ban quản lý';
+    case 'BRANCH':
+      return notification.targetBranch ? `Chi nhánh · ${notification.targetBranch}` : 'Theo chi nhánh';
+    case 'INDIVIDUAL':
+      return notification.targetAccountName
+        ? `Cá nhân · ${notification.targetAccountName}`
+        : 'Cá nhân';
   }
 }
 
-export function parseImportCsvPayload(
-  csvString: string,
-  now = Date.now()
-): { orders: BusinessOrder[]; summary: ImportSummary } {
-  const lines = csvString
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length === 0) {
-    return {
-      orders: [],
-      summary: {
-        ordersImported: 0,
-        servicesImported: 0,
-        revenuesImported: 0,
-        paymentSharesImported: 0,
-        errorMessage: 'Dữ liệu CSV trống.',
-      },
-    };
-  }
-  const dataLines = lines[0].toLowerCase().startsWith('trackingnumber') ? lines.slice(1) : lines;
-  const orders: BusinessOrder[] = [];
-
-  dataLines.forEach((line, index) => {
-    const cols = line.split(',').map((c) => c.trim());
-    if (cols.length >= 5) {
-      const tracking = cols[0] || `VN-${Math.floor(10000 + Math.random() * 90000)}-CSV`;
-      orders.push({
-        id: `ORD-CSV-${tracking}`,
-        trackingNumber: tracking,
-        senderName: cols[1] || 'Alex Nguyễn',
-        senderAddress: cols[2] || 'Hà Nội',
-        recipientName: cols[3] || 'Khách hàng',
-        recipientAddress: cols[4] || 'TP. Hồ Chí Minh',
-        status: normalizeOrderStatus(cols[5]),
-        serviceType: cols[6] || 'Tiết kiệm liên tỉnh',
-        feeVnd: Number(cols[7]) || 35000,
-        codVnd: Number(cols[8]) || 0,
-        createdAt: 'Nhập từ CSV',
-        estimatedDelivery: 'Dự kiến trong ngày',
-        weightKg: Number(cols[9]) || 1.0,
-        timestampMillis: now + (dataLines.length - index),
-      });
-    }
-  });
-
-  if (orders.length === 0) {
-    return {
-      orders: [],
-      summary: {
-        ordersImported: 0,
-        servicesImported: 0,
-        revenuesImported: 0,
-        paymentSharesImported: 0,
-        errorMessage: 'Không tìm thấy dòng CSV hợp lệ (cần tối thiểu 5 cột).',
-      },
-    };
-  }
+export function buildCompanyNotification(params: {
+  title: string;
+  message: string;
+  priority: NotificationPriority;
+  audience: NotificationAudience;
+  targetBranch?: string;
+  targetAccountId?: string;
+  sender: MockAccount;
+  accounts?: MockAccount[];
+  now?: number;
+}): CompanyNotification {
+  const now = params.now ?? Date.now();
+  const pool = params.accounts ?? MOCK_ACCOUNTS;
+  const targetAcc = params.targetAccountId
+    ? pool.find((a) => a.id === params.targetAccountId)
+    : undefined;
 
   return {
-    orders,
-    summary: {
-      ordersImported: orders.length,
-      servicesImported: 0,
-      revenuesImported: 0,
-      paymentSharesImported: 0,
-    },
+    id: `NTF-${now % 100000}-${Math.floor(10 + Math.random() * 89)}`,
+    title: params.title.trim(),
+    message: params.message.trim(),
+    priority: params.priority,
+    audience: params.audience,
+    targetBranch: params.audience === 'BRANCH' ? params.targetBranch : undefined,
+    targetAccountId: params.audience === 'INDIVIDUAL' ? targetAcc?.id : undefined,
+    targetAccountName: params.audience === 'INDIVIDUAL' ? targetAcc?.name : undefined,
+    senderId: params.sender.id,
+    senderName: params.sender.name,
+    senderRole: params.sender.role,
+    createdAt: `${formatTimeShort(now)} · Hôm nay`,
+    timestampMillis: now,
+    readByAccountIds: [params.sender.id],
   };
-}
-
-export function exportWorkspaceToJson(
-  orders: BusinessOrder[],
-  revenues: DailyRevenue[]
-): string {
-  return JSON.stringify(
-    {
-      orders: orders.map((o) => ({
-        id: o.id,
-        trackingNumber: o.trackingNumber,
-        senderName: o.senderName,
-        senderAddress: o.senderAddress,
-        recipientName: o.recipientName,
-        recipientAddress: o.recipientAddress,
-        status: o.status,
-        serviceType: o.serviceType,
-        feeVnd: o.feeVnd,
-        codVnd: o.codVnd,
-        createdAt: o.createdAt,
-        estimatedDelivery: o.estimatedDelivery,
-        weightKg: o.weightKg,
-      })),
-      revenues: revenues.map((r) => ({
-        dayIndex: r.dayIndex,
-        dayLabel: r.dayLabel,
-        amountVnd: r.amountVnd,
-        orderCount: r.orderCount,
-        isPeak: Boolean(r.isPeak),
-      })),
-    },
-    null,
-    2
-  );
 }

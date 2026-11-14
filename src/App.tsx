@@ -1,26 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  getDefaultDriver,
+  getDefaultActivities,
+  getDefaultNotifications,
   getDefaultOrders,
-  getDefaultPaymentShares,
-  getDefaultRevenues,
-  getDefaultServices,
-  getDefaultTrackingSteps,
-  getDefaultWeeklySchedule,
-  SAMPLE_IMPORT_JSON,
+  MOCK_ACCOUNTS,
 } from './data/seedData';
 import type {
-  BusinessService,
+  MockAccount,
+  NotificationAudience,
+  NotificationPriority,
   OrderStatus,
   WorkspaceSnapshot,
 } from './types/business';
 import {
-  buildNewOrder,
-  computeStatsFromOrders,
-  exportWorkspaceToJson,
-  mergeOrdersUpsert,
-  parseImportCsvPayload,
-  parseImportJsonPayload,
+  buildCompanyNotification,
+  buildQuickTask,
+  canApproveOrderStatus,
+  canDeleteOrders,
+  canExportEnterpriseReport,
+  canSendCompanyNotification,
+  computeOperationalStats,
+  downloadCsvFile,
+  formatTimeShort,
+  generateDailyActivitiesCsvReport,
+  getDailyActivitiesReportFilename,
+  getNotificationAudienceLabel,
+  getTodayDateKey,
+  getUnreadNotificationsCount,
+  isSupervisorAccount,
 } from './utils/businessLogic';
 import {
   DesktopNavigationRail,
@@ -28,27 +35,29 @@ import {
 } from './components/NavigationShell';
 import { HomeView } from './components/HomeView';
 import { OrdersView } from './components/OrdersView';
-import { TrackingView } from './components/TrackingView';
-import { ServicesView } from './components/ServicesView';
-import { AnalyticsView } from './components/AnalyticsView';
-import { ProfileView } from './components/ProfileView';
-import { CreateOrderModal } from './components/CreateOrderModal';
-import { DatabaseImportModal } from './components/DatabaseImportModal';
+import { NotificationsView } from './components/NotificationsView';
+import { CheckInView } from './components/CheckInView';
+import { SettingsView } from './components/SettingsView';
+import { CreateTaskModal } from './components/CreateTaskModal';
+import { AccountSwitcherModal } from './components/AccountSwitcherModal';
+import { SendNotificationModal } from './components/SendNotificationModal';
 
-const STORAGE_KEY = 'business_manage_workspace_v1';
+const STORAGE_KEY = 'business_manage_ops_v3';
+const ACCOUNT_STORAGE_KEY = 'business_manage_active_account_id';
 const THEME_STORAGE_KEY = 'business_manage_dark_mode';
 
 function createFallbackWorkspace(): WorkspaceSnapshot {
+  const now = Date.now();
   return {
-    orders: getDefaultOrders(),
-    services: getDefaultServices(),
-    dailyRevenues: getDefaultRevenues(),
-    paymentShares: getDefaultPaymentShares(),
-    activeDriver: getDefaultDriver(),
-    trackingSteps: getDefaultTrackingSteps(),
-    weeklySchedule: getDefaultWeeklySchedule(),
+    orders: getDefaultOrders(now),
+    activities: getDefaultActivities(now),
+    notifications: getDefaultNotifications(now),
+    accounts: MOCK_ACCOUNTS,
+    latestCheckIn: null,
     isCheckedInToday: false,
     attendanceCount: 124,
+    activeBranch: 'Trụ sở Hà Nội',
+    databaseMode: 'memory-fallback',
   };
 }
 
@@ -57,12 +66,31 @@ export default function App() {
     try {
       const cached = localStorage.getItem(STORAGE_KEY);
       if (cached) {
-        return JSON.parse(cached) as WorkspaceSnapshot;
+        const parsed = JSON.parse(cached) as Partial<WorkspaceSnapshot>;
+        if (Array.isArray(parsed.orders)) {
+          const fallback = createFallbackWorkspace();
+          return {
+            ...fallback,
+            ...parsed,
+            notifications: Array.isArray(parsed.notifications)
+              ? parsed.notifications
+              : fallback.notifications,
+            accounts: Array.isArray(parsed.accounts) ? parsed.accounts : MOCK_ACCOUNTS,
+          };
+        }
       }
     } catch {
       // Ignore storage read failures
     }
     return createFallbackWorkspace();
+  });
+
+  const [currentAccountId, setCurrentAccountId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACCOUNT_STORAGE_KEY) || MOCK_ACCOUNTS[0].id;
+    } catch {
+      return MOCK_ACCOUNTS[0].id;
+    }
   });
 
   const [selectedTab, setSelectedTab] = useState(0);
@@ -75,20 +103,23 @@ export default function App() {
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedOrderFilter, setSelectedOrderFilter] = useState<OrderStatus | null>(null);
-  const [selectedScheduleDayIndex, setSelectedScheduleDayIndex] = useState(4);
-  const [trackingOrderId, setTrackingOrderId] = useState('PRJ-88492-ERP');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [selectedServiceForOrder, setSelectedServiceForOrder] = useState<BusinessService | null>(null);
-  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
-  const [dbEditorPayload, setDbEditorPayload] = useState(SAMPLE_IMPORT_JSON);
+  const [isAccountSwitcherOpen, setIsAccountSwitcherOpen] = useState(false);
+  const [isSendNotifModalOpen, setIsSendNotifModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null);
 
-  // Sync dark mode class on <html> and <body>
+  const accounts = workspace.accounts?.length ? workspace.accounts : MOCK_ACCOUNTS;
+  const currentAccount = useMemo(
+    () => accounts.find((a) => a.id === currentAccountId) ?? accounts[0],
+    [accounts, currentAccountId]
+  );
+
   useEffect(() => {
     const root = document.documentElement;
     if (isDark) {
       root.classList.add('dark');
-      document.body.style.backgroundColor = '#0B111E';
+      document.body.style.backgroundColor = '#020617';
     } else {
       root.classList.remove('dark');
       document.body.style.backgroundColor = '#F8FAFC';
@@ -100,7 +131,6 @@ export default function App() {
     }
   }, [isDark]);
 
-  // Persist workspace locally as offline cache
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
@@ -109,64 +139,107 @@ export default function App() {
     }
   }, [workspace]);
 
-  // Fetch initial workspace from Express backend
   useEffect(() => {
-    let active = true;
-    fetch('/api/workspace')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: WorkspaceSnapshot | null) => {
-        if (active && data && Array.isArray(data.orders)) {
-          setWorkspace(data);
-          if (data.orders[0]?.trackingNumber) {
-            setTrackingOrderId(data.orders[0].trackingNumber);
+    try {
+      localStorage.setItem(ACCOUNT_STORAGE_KEY, currentAccount.id);
+    } catch {
+      // Ignore
+    }
+  }, [currentAccount.id]);
+
+  const fetchWorkspaceFromServer = async (showFeedback = false) => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/workspace');
+      if (res.ok) {
+        const data = (await res.json()) as WorkspaceSnapshot;
+        if (data && Array.isArray(data.orders)) {
+          setWorkspace({
+            ...data,
+            notifications: Array.isArray(data.notifications)
+              ? data.notifications
+              : getDefaultNotifications(),
+            accounts: Array.isArray(data.accounts) ? data.accounts : MOCK_ACCOUNTS,
+          });
+          if (showFeedback) {
+            setSnackbarMessage('Đã đồng bộ dữ liệu mới nhất từ máy chủ.');
           }
         }
-      })
-      .catch(() => {
-        // Fallback to localStorage / seed state silently
-      });
-    return () => {
-      active = false;
-    };
+      }
+    } catch {
+      if (showFeedback) {
+        setSnackbarMessage('Không kết nối được máy chủ, đang giữ bộ nhớ đệm.');
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    void fetchWorkspaceFromServer(false);
   }, []);
 
-  // Auto-dismiss snackbar
   useEffect(() => {
     if (!snackbarMessage) return;
-    const timer = setTimeout(() => setSnackbarMessage(null), 4000);
+    const timer = setTimeout(() => setSnackbarMessage(null), 3500);
     return () => clearTimeout(timer);
   }, [snackbarMessage]);
 
   const stats = useMemo(
-    () => computeStatsFromOrders(workspace.orders),
+    () => computeOperationalStats(workspace.orders),
     [workspace.orders]
   );
 
-  const handleCreateOrder = async (params: {
-    recipientName: string;
-    recipientAddress: string;
-    weightKg: number;
+  const pendingCount = useMemo(
+    () => workspace.orders.filter((o) => o.status === 'PENDING').length,
+    [workspace.orders]
+  );
+
+  const unreadNotificationsCount = useMemo(
+    () => getUnreadNotificationsCount(workspace.notifications, currentAccount),
+    [workspace.notifications, currentAccount]
+  );
+
+  const handleSelectAccount = (account: MockAccount) => {
+    setCurrentAccountId(account.id);
+    setWorkspace((prev) => ({ ...prev, activeBranch: account.branchName }));
+    const roleLabel = isSupervisorAccount(account) ? 'Cấp trên' : 'Cấp dưới';
+    setSnackbarMessage(`Đã chuyển sang ${account.name} (${roleLabel}).`);
+  };
+
+  const handleCreateTask = async (params: {
+    title: string;
+    assignee: string;
     departmentCode: string;
+    branchName: string;
+    budgetVnd?: number;
   }) => {
-    const service = selectedServiceForOrder ?? workspace.services[0];
-    const newOrder = buildNewOrder({
-      ...params,
-      service,
-    });
+    const now = Date.now();
+    const newTask = buildQuickTask({ ...params, now });
 
     setWorkspace((prev) => ({
       ...prev,
-      orders: [newOrder, ...prev.orders],
+      orders: [newTask, ...prev.orders],
+      activities: [
+        {
+          id: `ACT-${now}`,
+          type: 'ORDER_CREATED' as const,
+          title: `Tạo đầu việc ${newTask.trackingNumber}`,
+          description: `${newTask.senderAddress} (${newTask.recipientName})`,
+          timestamp: formatTimeShort(now),
+          timestampMillis: now,
+        },
+        ...prev.activities,
+      ].slice(0, 20),
     }));
-    setTrackingOrderId(newOrder.trackingNumber);
     setIsCreateModalOpen(false);
-    setSnackbarMessage(`Đã khởi tạo quy trình ${newOrder.trackingNumber} vào Database!`);
+    setSnackbarMessage(`Đã lưu ${newTask.trackingNumber}.`);
 
     try {
       await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newOrder),
+        body: JSON.stringify(newTask),
       });
     } catch {
       // Local state already updated
@@ -174,11 +247,31 @@ export default function App() {
   };
 
   const handleUpdateOrderStatus = async (orderId: string, status: OrderStatus) => {
+    const now = Date.now();
+    const target = workspace.orders.find((o) => o.id === orderId);
+    if (!target) return;
+
+    if (!canApproveOrderStatus(currentAccount, target.status, status)) {
+      setSnackbarMessage('Chỉ tài khoản Cấp trên mới có quyền phê duyệt hoặc điều phối trạng thái này.');
+      return;
+    }
+
     setWorkspace((prev) => ({
       ...prev,
       orders: prev.orders.map((o) => (o.id === orderId ? { ...o, status } : o)),
+      activities: [
+        {
+          id: `ACT-${now}`,
+          type: 'STATUS_UPDATED' as const,
+          title: `Cập nhật ${target.trackingNumber}`,
+          description: `${currentAccount.name} đã chuyển trạng thái công việc.`,
+          timestamp: formatTimeShort(now),
+          timestampMillis: now,
+        },
+        ...prev.activities,
+      ].slice(0, 20),
     }));
-    setSnackbarMessage('Đã cập nhật tiến độ quy trình trong Database!');
+    setSnackbarMessage('Đã cập nhật trạng thái công việc.');
 
     try {
       await fetch(`/api/orders/${encodeURIComponent(orderId)}/status`, {
@@ -192,11 +285,16 @@ export default function App() {
   };
 
   const handleDeleteOrder = async (orderId: string) => {
+    if (!canDeleteOrders(currentAccount)) {
+      setSnackbarMessage('Chỉ tài khoản Cấp trên mới được phép xóa đầu việc.');
+      return;
+    }
+
     setWorkspace((prev) => ({
       ...prev,
       orders: prev.orders.filter((o) => o.id !== orderId),
     }));
-    setSnackbarMessage('Đã xóa hạng mục khỏi Database');
+    setSnackbarMessage('Đã xóa đầu việc.');
 
     try {
       await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
@@ -207,106 +305,178 @@ export default function App() {
     }
   };
 
-  const handleGpsCheckIn = async () => {
-    if (!workspace.isCheckedInToday) {
-      setWorkspace((prev) => {
-        const nextCount = prev.attendanceCount + 1;
-        return {
-          ...prev,
-          isCheckedInToday: true,
-          attendanceCount: nextCount,
-          activeDriver: {
-            ...prev.activeDriver,
-            licensePlate: `HQ-HANOI-01 • ${nextCount}/130 Nhân sự có mặt`,
-            etaMinutes: prev.activeDriver.etaMinutes + 1,
+  const handlePerformCheckIn = async (branchName = workspace.activeBranch) => {
+    const now = Date.now();
+    const record = {
+      id: `CHK-${now}`,
+      userName: currentAccount.name,
+      branchName,
+      coordinates: '21.0358° N, 105.8188° E',
+      checkedInAt: `${formatTimeShort(now)} · Hôm nay`,
+      dateKey: getTodayDateKey(now),
+      timestampMillis: now,
+    };
+
+    setWorkspace((prev) => {
+      const sameBranchAlready =
+        prev.isCheckedInToday &&
+        prev.latestCheckIn?.branchName === branchName &&
+        prev.latestCheckIn?.userName === currentAccount.name;
+      if (sameBranchAlready) return prev;
+      return {
+        ...prev,
+        isCheckedInToday: true,
+        activeBranch: branchName,
+        latestCheckIn: record,
+        attendanceCount: prev.isCheckedInToday ? prev.attendanceCount : prev.attendanceCount + 1,
+        activities: [
+          {
+            id: `ACT-${now}-CHK`,
+            type: 'CHECK_IN' as const,
+            title: `Chấm công GPS tại ${branchName}`,
+            description: `${currentAccount.name} đã điểm danh trực ca.`,
+            timestamp: formatTimeShort(now),
+            timestampMillis: now,
           },
-        };
+          ...prev.activities,
+        ].slice(0, 20),
+      };
+    });
+    setSnackbarMessage(`${currentAccount.name} đã chấm công GPS tại ${branchName}.`);
+
+    try {
+      const res = await fetch('/api/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branchName, userName: currentAccount.name }),
       });
-      setSnackbarMessage('Đã chấm công GPS thành công tại Trụ sở Chính (0.1 km)!');
-      try {
-        await fetch('/api/checkin', { method: 'POST' });
-      } catch {
-        // Local state already updated
+      if (res.ok) {
+        const data = await res.json();
+        setWorkspace((prev) => ({
+          ...prev,
+          isCheckedInToday: Boolean(data.isCheckedInToday),
+          attendanceCount: Number(data.attendanceCount ?? prev.attendanceCount),
+          latestCheckIn: data.latestCheckIn ?? prev.latestCheckIn,
+          activeBranch: data.activeBranch ?? branchName,
+          activities: Array.isArray(data.activities) ? data.activities : prev.activities,
+        }));
       }
-    } else {
-      setSnackbarMessage('Bạn đã hoàn tất chấm công GPS hôm nay.');
+    } catch {
+      // Local state already updated
     }
   };
 
-  const handleImportJson = async (payload: string) => {
-    const parsed = parseImportJsonPayload(payload);
-    if (parsed.summary.errorMessage) {
-      setSnackbarMessage(parsed.summary.errorMessage);
+  const handleSendNotification = async (params: {
+    title: string;
+    message: string;
+    priority: NotificationPriority;
+    audience: NotificationAudience;
+    targetBranch?: string;
+    targetAccountId?: string;
+  }) => {
+    if (!canSendCompanyNotification(currentAccount)) {
+      setSnackbarMessage('Chỉ tài khoản Cấp trên mới có quyền gửi thông báo công ty.');
       return;
     }
 
+    const now = Date.now();
+    const optimistic = buildCompanyNotification({
+      ...params,
+      sender: currentAccount,
+      accounts,
+      now,
+    });
+    const audienceLabel = getNotificationAudienceLabel(optimistic);
+
     setWorkspace((prev) => ({
       ...prev,
-      orders: parsed.orders.length > 0 ? mergeOrdersUpsert(prev.orders, parsed.orders) : prev.orders,
-      services: parsed.services.length > 0 ? parsed.services : prev.services,
-      dailyRevenues: parsed.revenues.length > 0 ? parsed.revenues : prev.dailyRevenues,
-      paymentShares: parsed.paymentShares.length > 0 ? parsed.paymentShares : prev.paymentShares,
+      notifications: [optimistic, ...prev.notifications],
+      activities: [
+        {
+          id: `ACT-${now}-NTF`,
+          type: 'NOTIFICATION_SENT' as const,
+          title: `Thông báo: ${optimistic.title}`,
+          description: `${currentAccount.name} gửi tới ${audienceLabel}.`,
+          timestamp: formatTimeShort(now),
+          timestampMillis: now,
+        },
+        ...prev.activities,
+      ].slice(0, 20),
     }));
-
-    const totalImported =
-      parsed.summary.ordersImported +
-      parsed.summary.servicesImported +
-      parsed.summary.revenuesImported +
-      parsed.summary.paymentSharesImported;
-
-    setIsDbModalOpen(false);
-    setSnackbarMessage(`Đã nhập thành công ${totalImported} bản ghi vào Database!`);
+    setIsSendNotifModalOpen(false);
+    setSnackbarMessage(`Đã gửi thông báo tới ${audienceLabel}.`);
 
     try {
-      await fetch('/api/workspace/import-json', {
+      const res = await fetch('/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payload }),
+        body: JSON.stringify({
+          ...params,
+          senderId: currentAccount.id,
+        }),
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        setWorkspace((prev) => ({
+          ...prev,
+          notifications: [
+            saved,
+            ...prev.notifications.filter((n) => n.id !== optimistic.id && n.id !== saved.id),
+          ],
+        }));
+      }
+    } catch {
+      // Optimistic notification stays in local state
+    }
+  };
+
+  const handleMarkNotificationRead = async (notificationId: string) => {
+    setWorkspace((prev) => ({
+      ...prev,
+      notifications: prev.notifications.map((n) =>
+        n.id === notificationId && !n.readByAccountIds.includes(currentAccount.id)
+          ? { ...n, readByAccountIds: [...n.readByAccountIds, currentAccount.id] }
+          : n
+      ),
+    }));
+
+    try {
+      await fetch(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: currentAccount.id }),
       });
     } catch {
       // Local state already updated
     }
   };
 
-  const handleImportCsv = async (payload: string) => {
-    const parsed = parseImportCsvPayload(payload);
-    if (parsed.summary.errorMessage) {
-      setSnackbarMessage(parsed.summary.errorMessage);
-      return;
-    }
-
+  const handleMarkAllNotificationsRead = async () => {
     setWorkspace((prev) => ({
       ...prev,
-      orders: mergeOrdersUpsert(prev.orders, parsed.orders),
+      notifications: prev.notifications.map((n) =>
+        n.readByAccountIds.includes(currentAccount.id)
+          ? n
+          : { ...n, readByAccountIds: [...n.readByAccountIds, currentAccount.id] }
+      ),
     }));
-    setIsDbModalOpen(false);
-    setSnackbarMessage(
-      `Đã nhập ${parsed.summary.ordersImported} dự án/quy trình từ CSV vào Database!`
-    );
+    setSnackbarMessage('Đã đánh dấu đọc toàn bộ thông báo.');
 
     try {
-      await fetch('/api/workspace/import-csv', {
+      await fetch('/api/notifications/read-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payload }),
+        body: JSON.stringify({ accountId: currentAccount.id }),
       });
     } catch {
       // Local state already updated
     }
   };
 
-  const handleExportCurrentDb = () => {
-    const json = exportWorkspaceToJson(workspace.orders, workspace.dailyRevenues);
-    setDbEditorPayload(json);
-    setSnackbarMessage('Đã trích xuất dữ liệu hiện tại từ Database!');
-  };
-
-  const handleResetDatabase = async () => {
+  const handleResetWorkspace = async () => {
     const fresh = createFallbackWorkspace();
     setWorkspace(fresh);
-    setIsDbModalOpen(false);
-    setSnackbarMessage('Đã khôi phục dữ liệu mẫu Doanh nghiệp trong Database!');
-
+    setSnackbarMessage('Đã khôi phục dữ liệu mẫu.');
     try {
       const res = await fetch('/api/workspace/reset', { method: 'POST' });
       if (res.ok) {
@@ -314,129 +484,162 @@ export default function App() {
         setWorkspace(data);
       }
     } catch {
-      // Local state already reset
+      // Local fallback already applied
     }
   };
 
+  const handleDownloadDailyReport = () => {
+    if (!canExportEnterpriseReport(currentAccount)) {
+      setSnackbarMessage('Chỉ tài khoản Cấp trên mới có quyền xuất báo cáo CSV doanh nghiệp.');
+      return;
+    }
+    const reportDate = getTodayDateKey();
+    const csv = generateDailyActivitiesCsvReport({
+      activities: workspace.activities,
+      orders: workspace.orders,
+      activeBranch: workspace.activeBranch,
+      attendanceCount: workspace.attendanceCount,
+      isCheckedInToday: workspace.isCheckedInToday,
+      latestCheckIn: workspace.latestCheckIn,
+      reportDate,
+    });
+    const filename = getDailyActivitiesReportFilename(reportDate);
+    downloadCsvFile(filename, csv);
+    setSnackbarMessage(`Đã tải báo cáo hoạt động ngày (${filename}).`);
+  };
+
   return (
-    <div className="flex min-h-screen bg-[#F8FAFC] text-[#0F172A] dark:bg-[#0B111E] dark:text-[#F8FAFC]">
-      <DesktopNavigationRail selectedTab={selectedTab} onSelectTab={setSelectedTab} />
+    <div className="flex min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <DesktopNavigationRail
+        selectedTab={selectedTab}
+        pendingCount={pendingCount}
+        unreadNotificationsCount={unreadNotificationsCount}
+        onSelectTab={setSelectedTab}
+      />
 
       <main className="min-w-0 flex-1 overflow-y-auto">
         {selectedTab === 0 && (
           <HomeView
+            currentAccount={currentAccount}
             orders={workspace.orders}
             stats={stats}
-            weeklySchedule={workspace.weeklySchedule}
-            selectedScheduleDayIndex={selectedScheduleDayIndex}
+            activeBranch={workspace.activeBranch}
+            isCheckedInToday={workspace.isCheckedInToday}
+            latestCheckIn={workspace.latestCheckIn}
             attendanceCount={workspace.attendanceCount}
-            searchQuery={searchQuery}
+            unreadNotificationsCount={unreadNotificationsCount}
+            databaseMode={workspace.databaseMode}
             isDark={isDark}
-            onSearchChange={setSearchQuery}
-            onSelectScheduleDay={setSelectedScheduleDayIndex}
-            onTabSelect={setSelectedTab}
-            onCreateOrderClick={() => {
-              setSelectedServiceForOrder(workspace.services[0] ?? null);
-              setIsCreateModalOpen(true);
-            }}
-            onOpenDbImportClick={() => setIsDbModalOpen(true)}
-            onPerformCheckIn={handleGpsCheckIn}
-            onTrackOrderClick={setTrackingOrderId}
             onToggleDarkMode={setIsDark}
+            onOpenAccountSwitcher={() => setIsAccountSwitcherOpen(true)}
+            onOpenSendNotification={() => setIsSendNotifModalOpen(true)}
+            onDownloadReport={handleDownloadDailyReport}
+            onQuickCreateClick={() => setIsCreateModalOpen(true)}
+            onPerformCheckIn={() => void handlePerformCheckIn(workspace.activeBranch)}
+            onUpdateOrderStatus={(id, st) => void handleUpdateOrderStatus(id, st)}
+            onOpenTasksWithFilter={(filter) => {
+              setSelectedOrderFilter(filter);
+              setSelectedTab(1);
+            }}
+            onJumpToNotifications={() => setSelectedTab(2)}
+            onJumpToCheckIn={() => setSelectedTab(3)}
           />
         )}
 
         {selectedTab === 1 && (
           <OrdersView
+            currentAccount={currentAccount}
             orders={workspace.orders}
             searchQuery={searchQuery}
             selectedFilter={selectedOrderFilter}
             onSearchChange={setSearchQuery}
             onFilterSelect={setSelectedOrderFilter}
-            onCreateOrderClick={() => {
-              setSelectedServiceForOrder(workspace.services[0] ?? null);
-              setIsCreateModalOpen(true);
-            }}
-            onOpenDbImportClick={() => setIsDbModalOpen(true)}
-            onUpdateOrderStatus={handleUpdateOrderStatus}
-            onDeleteOrder={handleDeleteOrder}
-            onTrackOrderClick={setTrackingOrderId}
-            onJumpToTracking={() => setSelectedTab(2)}
+            onCreateOrderClick={() => setIsCreateModalOpen(true)}
+            onUpdateOrderStatus={(id, st) => void handleUpdateOrderStatus(id, st)}
+            onDeleteOrder={(id) => void handleDeleteOrder(id)}
           />
         )}
 
         {selectedTab === 2 && (
-          <TrackingView
-            trackingOrderId={trackingOrderId}
-            activeDriver={workspace.activeDriver}
-            trackingSteps={workspace.trackingSteps}
-            isCheckedInToday={workspace.isCheckedInToday}
-            attendanceCount={workspace.attendanceCount}
-            onPerformCheckIn={handleGpsCheckIn}
+          <NotificationsView
+            notifications={workspace.notifications}
+            currentAccount={currentAccount}
+            onOpenSendModal={() => setIsSendNotifModalOpen(true)}
+            onMarkRead={(id) => void handleMarkNotificationRead(id)}
+            onMarkAllRead={() => void handleMarkAllNotificationsRead()}
           />
         )}
 
         {selectedTab === 3 && (
-          <ServicesView
-            services={workspace.services}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onSelectService={(service) => {
-              setSelectedServiceForOrder(service);
-              setIsCreateModalOpen(true);
-            }}
+          <CheckInView
+            currentAccount={currentAccount}
+            activeBranch={workspace.activeBranch}
+            isCheckedInToday={workspace.isCheckedInToday}
+            latestCheckIn={workspace.latestCheckIn}
+            attendanceCount={workspace.attendanceCount}
+            activities={workspace.activities}
+            onSelectBranch={(branch) =>
+              setWorkspace((prev) => ({ ...prev, activeBranch: branch }))
+            }
+            onPerformCheckIn={(branch) => void handlePerformCheckIn(branch)}
+            onDownloadReport={handleDownloadDailyReport}
           />
         )}
 
         {selectedTab === 4 && (
-          <AnalyticsView
-            dailyRevenues={workspace.dailyRevenues}
-            paymentShares={workspace.paymentShares}
-            onOpenDbImportClick={() => setIsDbModalOpen(true)}
-          />
-        )}
-
-        {selectedTab === 5 && (
-          <ProfileView
+          <SettingsView
+            currentAccount={currentAccount}
+            accounts={accounts}
             ordersCount={workspace.orders.length}
+            databaseMode={workspace.databaseMode}
             isDark={isDark}
+            isSyncing={isSyncing}
+            onSelectAccount={handleSelectAccount}
+            onOpenAccountSwitcher={() => setIsAccountSwitcherOpen(true)}
+            onOpenSendNotification={() => setIsSendNotifModalOpen(true)}
             onToggleDarkMode={setIsDark}
-            onOpenDbImportClick={() => setIsDbModalOpen(true)}
-            onResetDbClick={handleResetDatabase}
+            onSyncNow={() => void fetchWorkspaceFromServer(true)}
+            onDownloadReport={handleDownloadDailyReport}
+            onResetWorkspace={() => void handleResetWorkspace()}
           />
         )}
       </main>
 
-      <MobileBottomNav selectedTab={selectedTab} onSelectTab={setSelectedTab} />
-
-      <CreateOrderModal
-        isOpen={isCreateModalOpen}
-        services={workspace.services}
-        selectedService={selectedServiceForOrder}
-        onSelectService={setSelectedServiceForOrder}
-        onClose={() => setIsCreateModalOpen(false)}
-        onConfirm={handleCreateOrder}
+      <MobileBottomNav
+        selectedTab={selectedTab}
+        pendingCount={pendingCount}
+        unreadNotificationsCount={unreadNotificationsCount}
+        onSelectTab={setSelectedTab}
       />
 
-      <DatabaseImportModal
-        isOpen={isDbModalOpen}
-        ordersCount={workspace.orders.length}
-        servicesCount={workspace.services.length}
-        revenuesCount={workspace.dailyRevenues.length}
-        payload={dbEditorPayload}
-        onPayloadChange={setDbEditorPayload}
-        onImportJson={handleImportJson}
-        onImportCsv={handleImportCsv}
-        onExportCurrentDb={handleExportCurrentDb}
-        onResetDatabase={handleResetDatabase}
-        onClose={() => setIsDbModalOpen(false)}
+      <CreateTaskModal
+        isOpen={isCreateModalOpen}
+        defaultBranch={workspace.activeBranch}
+        onClose={() => setIsCreateModalOpen(false)}
+        onConfirm={(params) => void handleCreateTask(params)}
+      />
+
+      <AccountSwitcherModal
+        isOpen={isAccountSwitcherOpen}
+        accounts={accounts}
+        currentAccountId={currentAccount.id}
+        onSelectAccount={handleSelectAccount}
+        onClose={() => setIsAccountSwitcherOpen(false)}
+      />
+
+      <SendNotificationModal
+        isOpen={isSendNotifModalOpen}
+        accounts={accounts}
+        defaultBranch={workspace.activeBranch}
+        onClose={() => setIsSendNotifModalOpen(false)}
+        onSend={(params) => void handleSendNotification(params)}
       />
 
       {snackbarMessage && (
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-[#0F172A] px-4 py-2.5 text-xs font-semibold text-white shadow-lg md:bottom-6 dark:bg-blue-600"
+          className="fixed bottom-20 left-1/2 z-40 w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl bg-slate-900 px-4 py-2.5 text-center text-xs font-semibold leading-snug text-white shadow-lg md:bottom-6 dark:bg-[#1A56FA]"
         >
           {snackbarMessage}
         </div>

@@ -1,9 +1,16 @@
-export type OrderStatus = 'DELIVERING' | 'PENDING' | 'COMPLETED' | 'CANCELLED';
+export type OrderStatus = 'PENDING' | 'DELIVERING' | 'COMPLETED' | 'CANCELLED';
 
 export const ORDER_STATUS_META: Record<
   OrderStatus,
   { label: string; bgLight: string; textLight: string; bgDark: string; textDark: string }
 > = {
+  PENDING: {
+    label: 'Chờ duyệt',
+    bgLight: 'bg-amber-50',
+    textLight: 'text-amber-700',
+    bgDark: 'dark:bg-amber-950/70',
+    textDark: 'dark:text-amber-300',
+  },
   DELIVERING: {
     label: 'Đang triển khai',
     bgLight: 'bg-blue-50',
@@ -11,36 +18,29 @@ export const ORDER_STATUS_META: Record<
     bgDark: 'dark:bg-blue-950/70',
     textDark: 'dark:text-blue-300',
   },
-  PENDING: {
-    label: 'Chờ phê duyệt',
-    bgLight: 'bg-amber-50',
-    textLight: 'text-amber-700',
-    bgDark: 'dark:bg-amber-950/70',
-    textDark: 'dark:text-amber-300',
-  },
   COMPLETED: {
-    label: 'Đã nghiệm thu',
+    label: 'Hoàn tất',
     bgLight: 'bg-emerald-50',
     textLight: 'text-emerald-700',
     bgDark: 'dark:bg-emerald-950/70',
     textDark: 'dark:text-emerald-300',
   },
   CANCELLED: {
-    label: 'Tạm dừng / Quá hạn',
-    bgLight: 'bg-red-50',
-    textLight: 'text-red-700',
-    bgDark: 'dark:bg-red-950/70',
-    textDark: 'dark:text-red-300',
+    label: 'Tạm dừng',
+    bgLight: 'bg-slate-100',
+    textLight: 'text-slate-600',
+    bgDark: 'dark:bg-slate-800',
+    textDark: 'dark:text-slate-300',
   },
 };
 
 export interface BusinessOrder {
   id: string;
   trackingNumber: string;
-  senderName: string;
-  senderAddress: string;
-  recipientName: string;
-  recipientAddress: string;
+  senderName: string; // Phòng ban chủ trì
+  senderAddress: string; // Tiêu đề công việc / Dự án
+  recipientName: string; // Nhân sự phụ trách
+  recipientAddress: string; // Chi nhánh / Ghi chú hiện trường
   status: OrderStatus;
   serviceType: string;
   feeVnd: number;
@@ -52,81 +52,83 @@ export interface BusinessOrder {
 }
 
 export interface StatCardData {
+  key: 'pending' | 'active' | 'completed';
   title: string;
   count: string;
   subtitle: string;
-  trend: string;
-  isPositive: boolean;
 }
 
-export interface BusinessService {
+export type ActivityType =
+  | 'ORDER_CREATED'
+  | 'STATUS_UPDATED'
+  | 'CHECK_IN'
+  | 'NOTIFICATION_SENT'
+  | 'SYSTEM';
+
+export interface ActivityLogItem {
   id: string;
-  name: string;
-  description: string;
-  basePriceVnd: number;
-  deliveryTime: string;
-  popularTag?: string | null;
-}
-
-export interface DailyRevenue {
-  dayIndex: number;
-  dayLabel: string;
-  amountVnd: number;
-  orderCount: number;
-  isPeak?: boolean;
-}
-
-export interface PaymentMethodShare {
-  name: string;
-  percentage: number;
-  totalVnd: number;
-}
-
-export interface BranchSupervisor {
-  name: string;
-  phone: string;
-  licensePlate: string;
-  vehicleModel: string;
-  rating: number;
-  completedTrips: number;
-  currentDistanceKm: number;
-  etaMinutes: number;
-}
-
-export interface TrackingStep {
+  type: ActivityType;
   title: string;
   description: string;
   timestamp: string;
-  isDone: boolean;
-  isCurrent: boolean;
+  timestampMillis: number;
 }
 
-export interface ScheduleDayItem {
-  dayOfWeek: string;
-  dayNumber: string;
-  meetingTitle: string;
+export interface CheckInRecord {
+  id: string;
+  userName: string;
+  branchName: string;
+  coordinates: string;
+  checkedInAt: string;
+  dateKey: string;
+  timestampMillis: number;
+}
+
+export type UserRole = 'SUPERVISOR' | 'SUBORDINATE';
+
+export interface MockAccount {
+  id: string;
+  name: string;
+  role: UserRole;
+  title: string;
   department: string;
-  timeSlot: string;
-  roomOrLocation: string;
-  statusBadge: string;
+  branchName: string;
 }
 
-export interface ImportSummary {
-  ordersImported: number;
-  servicesImported: number;
-  revenuesImported: number;
-  paymentSharesImported: number;
-  errorMessage?: string;
+export type NotificationPriority = 'NORMAL' | 'IMPORTANT' | 'URGENT';
+
+export type NotificationAudience =
+  | 'ALL_STAFF'
+  | 'SUBORDINATES'
+  | 'SUPERVISORS'
+  | 'BRANCH'
+  | 'INDIVIDUAL';
+
+export interface CompanyNotification {
+  id: string;
+  title: string;
+  message: string;
+  priority: NotificationPriority;
+  audience: NotificationAudience;
+  targetBranch?: string;
+  targetAccountId?: string;
+  targetAccountName?: string;
+  senderId: string;
+  senderName: string;
+  senderRole: UserRole;
+  createdAt: string;
+  timestampMillis: number;
+  readByAccountIds: string[];
 }
 
 export interface WorkspaceSnapshot {
   orders: BusinessOrder[];
-  services: BusinessService[];
-  dailyRevenues: DailyRevenue[];
-  paymentShares: PaymentMethodShare[];
-  activeDriver: BranchSupervisor;
-  trackingSteps: TrackingStep[];
-  weeklySchedule: ScheduleDayItem[];
+  activities: ActivityLogItem[];
+  notifications: CompanyNotification[];
+  accounts: MockAccount[];
+  latestCheckIn: CheckInRecord | null;
   isCheckedInToday: boolean;
   attendanceCount: number;
+  activeBranch: string;
+  databaseMode: 'mongodb' | 'memory-fallback';
 }

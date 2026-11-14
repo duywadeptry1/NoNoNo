@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
@@ -19,19 +20,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.BusinessCenter
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.outlined.AccountBalanceWallet
-import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -53,16 +54,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.model.OrderStatus
+import com.example.ui.components.AccountSwitcherSheet
 import com.example.ui.components.CreateOrderSheet
-import com.example.ui.components.DatabaseImportSheet
-import com.example.ui.screens.AnalyticsScreen
+import com.example.ui.components.SendNotificationSheet
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.OrdersScreen
 import com.example.ui.screens.ProfileScreen
-import com.example.ui.screens.ServicesScreen
 import com.example.ui.screens.TrackingScreen
 import com.example.ui.theme.BrandBlue
 import com.example.ui.theme.LocalThemeIsDark
@@ -73,7 +77,8 @@ data class NavItem(
     val title: String,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector,
-    val tag: String
+    val tag: String,
+    val badgeCount: Int = 0
 )
 
 @Composable
@@ -83,8 +88,8 @@ fun MainAdaptiveScreen(
 ) {
     val isDark = LocalThemeIsDark.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val unreadNotifs = viewModel.unreadNotificationsCount(uiState.notifications, uiState.currentAccount)
 
-    // Return to Home tab when pressing Back on secondary tabs
     BackHandler(enabled = uiState.selectedTab != 0) {
         viewModel.selectTab(0)
     }
@@ -102,17 +107,21 @@ fun MainAdaptiveScreen(
     val navItems = listOf(
         NavItem("Tổng quan", Icons.Filled.Dashboard, Icons.Outlined.Dashboard, "nav_home"),
         NavItem("Công việc", Icons.Filled.Assignment, Icons.Outlined.Assignment, "nav_orders"),
-        NavItem("Chi nhánh", Icons.Filled.LocationOn, Icons.Outlined.LocationOn, "nav_tracking"),
-        NavItem("Nhân sự", Icons.Filled.Groups, Icons.Outlined.Groups, "nav_services"),
-        NavItem("Tài chính", Icons.Filled.AccountBalanceWallet, Icons.Outlined.AccountBalanceWallet, "nav_analytics"),
-        NavItem("Hệ thống", Icons.Filled.AccountCircle, Icons.Outlined.AccountCircle, "nav_profile")
+        NavItem(
+            "Thông báo",
+            Icons.Filled.Notifications,
+            Icons.Outlined.Notifications,
+            "nav_notifications",
+            badgeCount = unreadNotifs
+        ),
+        NavItem("Chấm công", Icons.Filled.LocationOn, Icons.Outlined.LocationOn, "nav_checkin"),
+        NavItem("Cài đặt", Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
     )
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTablet = maxWidth > 600.dp
 
         if (isTablet) {
-            // Tablet Layout with NavigationRail
             Row(
                 modifier = Modifier
                     .fillMaxSize()
@@ -158,16 +167,14 @@ fun MainAdaptiveScreen(
                             selected = selected,
                             onClick = { viewModel.selectTab(index) },
                             icon = {
-                                Icon(
-                                    imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                    contentDescription = item.title
-                                )
+                                NavIconWithBadge(item = item, selected = selected)
                             },
                             label = {
                                 Text(
                                     text = item.title,
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1
                                 )
                             },
                             colors = NavigationRailItemDefaults.colors(
@@ -183,7 +190,6 @@ fun MainAdaptiveScreen(
                     Spacer(modifier = Modifier.weight(1f))
                 }
 
-                // Main Content Area
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -201,7 +207,6 @@ fun MainAdaptiveScreen(
                 }
             }
         } else {
-            // Mobile Layout with Bottom NavigationBar
             Scaffold(
                 containerColor = MaterialTheme.colorScheme.background,
                 contentWindowInsets = WindowInsets.safeDrawing,
@@ -220,18 +225,15 @@ fun MainAdaptiveScreen(
                                 selected = selected,
                                 onClick = { viewModel.selectTab(index) },
                                 icon = {
-                                    Icon(
-                                        imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
-                                        contentDescription = item.title,
-                                        modifier = Modifier.size(22.dp)
-                                    )
+                                    NavIconWithBadge(item = item, selected = selected)
                                 },
                                 label = {
                                     Text(
                                         text = item.title,
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 },
                                 colors = NavigationBarItemDefaults.colors(
@@ -261,31 +263,63 @@ fun MainAdaptiveScreen(
             }
         }
 
-        // Create Business Project / Task Sheet Modal
         CreateOrderSheet(
             isVisible = uiState.isCreateOrderSheetVisible,
-            services = uiState.services,
-            selectedService = uiState.selectedServiceForOrder,
-            onServiceSelect = { viewModel.selectServiceForOrder(it) },
+            defaultBranch = uiState.activeBranch,
             onDismiss = { viewModel.closeCreateOrderSheet() },
-            onConfirm = { name, address, weight, payment ->
-                viewModel.createOrder(name, address, weight, payment)
+            onConfirm = { title, assignee, dept, branch, budget ->
+                viewModel.createQuickTask(title, assignee, dept, branch, budget)
             }
         )
 
-        // Database Import & Management Sheet Modal
-        DatabaseImportSheet(
-            isVisible = uiState.isDatabaseImportSheetVisible,
-            ordersCount = uiState.orders.size,
-            servicesCount = uiState.services.size,
-            revenuesCount = uiState.dailyRevenues.size,
-            editorPayload = uiState.databaseEditorPayload,
-            onPayloadChange = { viewModel.updateDatabaseEditorPayload(it) },
-            onImportJson = { viewModel.importDataFromJson(it) },
-            onImportCsv = { viewModel.importDataFromCsv(it) },
-            onExportCurrentDb = { viewModel.loadCurrentDatabaseIntoEditor() },
-            onResetDatabase = { viewModel.resetDatabaseToDefaults() },
-            onDismiss = { viewModel.closeDatabaseImportSheet() }
+        AccountSwitcherSheet(
+            isVisible = uiState.isAccountSwitcherVisible,
+            accounts = uiState.accounts,
+            currentAccountId = uiState.currentAccount.id,
+            onDismiss = { viewModel.closeAccountSwitcher() },
+            onSelectAccount = { id -> viewModel.switchAccount(id) }
+        )
+
+        SendNotificationSheet(
+            isVisible = uiState.isSendNotificationSheetVisible,
+            defaultBranch = uiState.activeBranch,
+            accounts = uiState.accounts,
+            onDismiss = { viewModel.closeSendNotificationSheet() },
+            onSend = { title, msg, priority, audience, branch, targetId ->
+                viewModel.sendCompanyNotification(
+                    title = title,
+                    message = msg,
+                    priority = priority,
+                    audience = audience,
+                    targetBranch = branch,
+                    targetAccountId = targetId
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun NavIconWithBadge(item: NavItem, selected: Boolean) {
+    if (item.badgeCount > 0) {
+        BadgedBox(
+            badge = {
+                Badge(containerColor = BrandBlue, contentColor = Color.White) {
+                    Text(text = item.badgeCount.toString())
+                }
+            }
+        ) {
+            Icon(
+                imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
+                contentDescription = item.title,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    } else {
+        Icon(
+            imageVector = if (selected) item.selectedIcon else item.unselectedIcon,
+            contentDescription = item.title,
+            modifier = Modifier.size(22.dp)
         )
     }
 }
@@ -296,47 +330,89 @@ private fun ScreenContent(
     viewModel: GoShipViewModel,
     uiState: GoShipUiState
 ) {
+    val context = LocalContext.current
+    val isSupervisor = viewModel.isSupervisor(uiState.currentAccount)
+    val visibleNotifications = viewModel.visibleNotifications(uiState.notifications, uiState.currentAccount)
+    val unreadNotifs = viewModel.unreadNotificationsCount(uiState.notifications, uiState.currentAccount)
+
+    val shareCsvReport: () -> Unit = {
+        if (viewModel.canExportEnterpriseReport(uiState.currentAccount)) {
+            val csv = viewModel.generateDailyActivitiesCsvReport()
+            val filename = viewModel.getDailyActivitiesReportFilename()
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/csv"
+                putExtra(Intent.EXTRA_SUBJECT, filename)
+                putExtra(Intent.EXTRA_TEXT, csv)
+            }
+            context.startActivity(
+                Intent.createChooser(shareIntent, "Xuất báo cáo hoạt động ngày (CSV)")
+            )
+        }
+    }
+
     Crossfade(targetState = tabIndex, label = "screen_transition") { targetTab ->
         when (targetTab) {
             0 -> HomeScreen(
                 uiState = uiState,
-                onSearchChange = { viewModel.updateSearchQuery(it) },
+                isSupervisor = isSupervisor,
+                unreadNotificationsCount = unreadNotifs,
+                canAdvanceOrder = { order ->
+                    val next = when (order.status) {
+                        OrderStatus.PENDING -> OrderStatus.DELIVERING
+                        OrderStatus.DELIVERING -> OrderStatus.COMPLETED
+                        OrderStatus.CANCELLED -> OrderStatus.PENDING
+                        OrderStatus.COMPLETED -> if (isSupervisor) OrderStatus.DELIVERING else OrderStatus.COMPLETED
+                    }
+                    order.status != OrderStatus.COMPLETED &&
+                        viewModel.canApproveOrderStatus(order.status, next, uiState.currentAccount)
+                },
                 onTabSelect = { viewModel.selectTab(it) },
-                onSelectScheduleDay = { viewModel.selectScheduleDay(it) },
                 onPerformCheckIn = { viewModel.performGpsCheckIn() },
                 onCreateOrderClick = { viewModel.openCreateOrderSheet() },
-                onOpenDbImportClick = { viewModel.openDatabaseImportSheet() },
-                onTrackOrderClick = { viewModel.setTrackingOrder(it) },
+                onOpenAccountSwitcher = { viewModel.openAccountSwitcher() },
+                onOpenSendNotification = { viewModel.openSendNotificationSheet() },
+                onExportCsv = shareCsvReport,
+                onQuickAdvance = { viewModel.advanceOrderStatus(it) },
                 onToggleDarkMode = { viewModel.toggleDarkMode(it) }
             )
             1 -> OrdersScreen(
                 uiState = uiState,
+                isSupervisor = isSupervisor,
+                canApproveStatus = { cur, nxt ->
+                    viewModel.canApproveOrderStatus(cur, nxt, uiState.currentAccount)
+                },
                 onSearchChange = { viewModel.updateSearchQuery(it) },
                 onFilterSelect = { viewModel.filterOrders(it) },
                 onCreateOrderClick = { viewModel.openCreateOrderSheet() },
-                onOpenDbImportClick = { viewModel.openDatabaseImportSheet() },
                 onUpdateOrderStatus = { id, st -> viewModel.updateOrderStatus(id, st) },
-                onDeleteOrder = { id -> viewModel.deleteOrder(id) },
-                onTrackOrderClick = { viewModel.setTrackingOrder(it) },
-                onJumpToTracking = { viewModel.selectTab(2) }
+                onAdvanceOrderStatus = { viewModel.advanceOrderStatus(it) },
+                onDeleteOrder = { id -> viewModel.deleteOrder(id) }
             )
-            2 -> TrackingScreen(
+            2 -> NotificationsScreen(
                 uiState = uiState,
-                onPerformCheckIn = { viewModel.performGpsCheckIn() }
+                visibleNotifications = visibleNotifications,
+                unreadCount = unreadNotifs,
+                isSupervisor = isSupervisor,
+                onOpenComposer = { viewModel.openSendNotificationSheet() },
+                onMarkRead = { id -> viewModel.markNotificationRead(id) },
+                onMarkAllRead = { viewModel.markAllNotificationsRead() }
             )
-            3 -> ServicesScreen(
+            3 -> TrackingScreen(
                 uiState = uiState,
-                onSearchChange = { viewModel.updateSearchQuery(it) },
-                onSelectService = { viewModel.openCreateOrderSheet(it) }
+                canExportCsv = isSupervisor,
+                onSelectBranch = { viewModel.selectBranch(it) },
+                onPerformCheckIn = { viewModel.performGpsCheckIn(it) },
+                onExportCsv = shareCsvReport
             )
-            4 -> AnalyticsScreen(
+            else -> ProfileScreen(
                 uiState = uiState,
-                onOpenDbImportClick = { viewModel.openDatabaseImportSheet() }
-            )
-            5 -> ProfileScreen(
-                uiState = uiState,
+                isSupervisor = isSupervisor,
+                onSwitchAccount = { id -> viewModel.switchAccount(id) },
+                onOpenAccountSwitcher = { viewModel.openAccountSwitcher() },
+                onOpenSendNotification = { viewModel.openSendNotificationSheet() },
+                onExportCsv = shareCsvReport,
                 onToggleDarkMode = { viewModel.toggleDarkMode(it) },
-                onOpenDbImportClick = { viewModel.openDatabaseImportSheet() },
+                onSyncNow = { viewModel.syncWithServer() },
                 onResetDbClick = { viewModel.resetDatabaseToDefaults() }
             )
         }

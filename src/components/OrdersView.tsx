@@ -1,48 +1,54 @@
 import { useMemo, useState } from 'react';
+import { Check, CheckSquare, Lock, Plus, Search, Trash2, X } from 'lucide-react';
 import {
-  Briefcase,
-  CloudDownload,
-  Plus,
-  Search,
-  Trash2,
-} from 'lucide-react';
-import { ORDER_STATUS_META, type BusinessOrder, type OrderStatus } from '../types/business';
-import { filterOrders, formatVnd } from '../utils/businessLogic';
+  ORDER_STATUS_META,
+  type BusinessOrder,
+  type MockAccount,
+  type OrderStatus,
+} from '../types/business';
+import {
+  canApproveOrderStatus,
+  canDeleteOrders,
+  filterOrders,
+  formatVnd,
+  getNextWorkflowAction,
+  isSupervisorAccount,
+} from '../utils/businessLogic';
 import { OrderCard } from './OrderCard';
 import { StatusBadge } from './StatusBadge';
 
 interface OrdersViewProps {
+  currentAccount: MockAccount;
   orders: BusinessOrder[];
   searchQuery: string;
   selectedFilter: OrderStatus | null;
   onSearchChange: (q: string) => void;
   onFilterSelect: (status: OrderStatus | null) => void;
   onCreateOrderClick: () => void;
-  onOpenDbImportClick: () => void;
   onUpdateOrderStatus: (orderId: string, status: OrderStatus) => void;
   onDeleteOrder: (orderId: string) => void;
-  onTrackOrderClick: (trackingNumber: string) => void;
-  onJumpToTracking: () => void;
 }
 
-const ALL_STATUSES: OrderStatus[] = ['DELIVERING', 'PENDING', 'COMPLETED', 'CANCELLED'];
+const ALL_STATUSES: OrderStatus[] = ['PENDING', 'DELIVERING', 'COMPLETED', 'CANCELLED'];
 
 export function OrdersView({
+  currentAccount,
   orders,
   searchQuery,
   selectedFilter,
   onSearchChange,
   onFilterSelect,
   onCreateOrderClick,
-  onOpenDbImportClick,
   onUpdateOrderStatus,
   onDeleteOrder,
-  onTrackOrderClick,
-  onJumpToTracking,
 }: OrdersViewProps) {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(
     orders[0]?.id ?? null
   );
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+
+  const isSupervisor = isSupervisorAccount(currentAccount);
+  const canDelete = canDeleteOrders(currentAccount);
 
   const filteredOrders = useMemo(
     () => filterOrders(orders, searchQuery, selectedFilter),
@@ -54,63 +60,175 @@ export function OrdersView({
     filteredOrders[0] ??
     null;
 
+  const renderDetailBody = (order: BusinessOrder) => {
+    const nextAction = getNextWorkflowAction(order.status);
+    const canAdvance = canApproveOrderStatus(currentAccount, order.status, nextAction.nextStatus);
+
+    return (
+      <>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <span className="font-mono text-xs font-semibold text-[#1A56FA] dark:text-blue-400">
+              {order.trackingNumber}
+            </span>
+            <h2 className="mt-1 text-base font-bold text-slate-900 dark:text-slate-100">
+              {order.senderAddress}
+            </h2>
+          </div>
+          {canDelete && (
+            <button
+              type="button"
+              onClick={() => {
+                onDeleteOrder(order.id);
+                setMobileDetailOpen(false);
+              }}
+              aria-label={`Xóa công việc ${order.trackingNumber}`}
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-red-500 transition hover:bg-red-50 dark:hover:bg-red-950/40"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="mt-2 flex items-center gap-2">
+          <StatusBadge status={order.status} />
+          <span className="text-xs text-slate-400">·</span>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {order.estimatedDelivery}
+          </span>
+        </div>
+
+        <div className="my-4 border-t border-slate-100 dark:border-slate-800" />
+
+        <dl className="space-y-3 text-sm">
+          <div>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">Bộ phận phụ trách</dt>
+            <dd className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
+              {order.senderName}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">Người thực hiện & Địa điểm</dt>
+            <dd className="mt-0.5 font-semibold text-slate-900 dark:text-slate-100">
+              {order.recipientName} · {order.recipientAddress}
+            </dd>
+          </div>
+          {order.codVnd > 0 && (
+            <div>
+              <dt className="text-xs text-slate-500 dark:text-slate-400">Ngân sách dự kiến</dt>
+              <dd className="mt-0.5 font-mono font-bold tabular-nums text-[#1A56FA] dark:text-blue-400">
+                {formatVnd(order.codVnd)}
+              </dd>
+            </div>
+          )}
+        </dl>
+
+        {isSupervisor ? (
+          <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <p className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+              Điều phối trạng thái (Quyền Cấp trên)
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {ALL_STATUSES.map((st) => {
+                const active = order.status === st;
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => onUpdateOrderStatus(order.id, st)}
+                    aria-pressed={active}
+                    className={`min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                      active
+                        ? 'bg-[#1A56FA] text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {ORDER_STATUS_META[st].label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 flex items-center gap-2 border-t border-slate-100 pt-4 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>
+              Tài khoản Cấp dưới chỉ xác nhận hoàn tất việc đang triển khai; duyệt hoặc xóa do Cấp trên thực hiện.
+            </span>
+          </div>
+        )}
+
+        {canAdvance && (
+          <button
+            type="button"
+            onClick={() => {
+              onUpdateOrderStatus(order.id, nextAction.nextStatus);
+              setMobileDetailOpen(false);
+            }}
+            className="mt-4 flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
+          >
+            <Check className="h-4 w-4" aria-hidden="true" />
+            <span>{nextAction.label}</span>
+          </button>
+        )}
+      </>
+    );
+  };
+
   return (
-    <div className="mx-auto max-w-6xl space-y-5 px-4 py-5 pb-24 md:px-8 md:pb-8">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-6xl space-y-5 px-4 py-5 pb-24 md:px-8 md:py-6 md:pb-10">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
         <div>
-          <h1 className="text-xl font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-            Quản lý Dự án & Quy trình ({orders.length})
+          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+            Công việc & Phê duyệt ({orders.length})
           </h1>
-          <p className="text-xs text-[#64748B] dark:text-[#94A3B8]">
-            Đồng bộ thời gian thực với Backend API & Database
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            {isSupervisor
+              ? 'Quyền Cấp trên: Duyệt nhanh đề xuất, điều phối và xóa đầu việc'
+              : 'Quyền Cấp dưới: Gửi đề xuất mới và báo cáo hoàn tất việc đang chạy'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenDbImportClick}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#E2E8F0] bg-white px-3.5 py-2 text-xs font-bold text-[#0F172A] transition hover:bg-slate-50 dark:border-[#2E3E55] dark:bg-[#151E2E] dark:text-[#F8FAFC] dark:hover:bg-[#1E293B]"
-          >
-            <CloudDownload className="h-4 w-4 text-[#1A56FA]" />
-            <span>Nhập / Xuất DB</span>
-          </button>
-          <button
-            type="button"
-            onClick={onCreateOrderClick}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1A56FA] px-3.5 py-2 text-xs font-bold text-white transition hover:bg-[#1447C6]"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Tạo dự án</span>
-          </button>
-        </div>
+
+        <button
+          type="button"
+          onClick={onCreateOrderClick}
+          className="inline-flex min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-xl bg-[#1A56FA] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#1447C6]"
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          <span>{isSupervisor ? 'Thêm việc mới' : 'Gửi đề xuất'}</span>
+        </button>
       </header>
 
-      {/* Search & Filter Controls */}
+      {/* Search & Horizontal Scrollable Segmented Status Filter */}
       <div className="space-y-3">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#94A3B8]" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <label htmlFor="orders-search-input" className="sr-only">
-            Tìm kiếm dự án theo mã hoặc phòng ban
+            Tìm kiếm công việc theo mã, tiêu đề hoặc người phụ trách
           </label>
           <input
             id="orders-search-input"
             type="search"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Tìm theo mã PRJ, phòng ban hoặc người phụ trách…"
-            className="w-full rounded-xl border border-[#E2E8F0] bg-white py-2.5 pl-10 pr-4 text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:border-[#1A56FA] focus:outline-none dark:border-[#2E3E55] dark:bg-[#151E2E] dark:text-[#F8FAFC]"
+            placeholder="Tìm mã việc, nội dung hoặc người phụ trách…"
+            className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1A56FA] focus:outline-none dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
           />
         </div>
 
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Lọc theo trạng thái">
+        <div
+          className="flex items-center gap-1.5 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-900"
+          role="group"
+          aria-label="Lọc theo trạng thái"
+        >
           <button
             type="button"
             onClick={() => onFilterSelect(null)}
             aria-pressed={selectedFilter === null}
-            className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+            className={`min-h-[40px] shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
               selectedFilter === null
-                ? 'bg-[#1A56FA] text-white'
-                : 'border border-[#E2E8F0] bg-white text-[#64748B] hover:bg-slate-50 dark:border-[#2E3E55] dark:bg-[#151E2E] dark:text-[#94A3B8]'
+                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-800 dark:text-slate-100'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
             Tất cả ({orders.length})
@@ -124,10 +242,10 @@ export function OrdersView({
                 type="button"
                 onClick={() => onFilterSelect(active ? null : status)}
                 aria-pressed={active}
-                className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                className={`min-h-[40px] shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   active
-                    ? 'bg-[#1A56FA] text-white'
-                    : 'border border-[#E2E8F0] bg-white text-[#64748B] hover:bg-slate-50 dark:border-[#2E3E55] dark:bg-[#151E2E] dark:text-[#94A3B8]'
+                    ? 'bg-white text-[#1A56FA] shadow-xs dark:bg-slate-800 dark:text-blue-400'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 {ORDER_STATUS_META[status].label} ({count})
@@ -139,152 +257,97 @@ export function OrdersView({
 
       {/* Master-Detail Split Layout */}
       {filteredOrders.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#CBD5E1] bg-white py-12 text-center dark:border-[#2E3E55] dark:bg-[#151E2E]">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#EBF2FF] text-[#1A56FA] dark:bg-blue-950/70 dark:text-blue-400">
-            <Briefcase className="h-7 w-7" />
-          </div>
-          <h2 className="mt-3 text-base font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-            Không tìm thấy dự án / quy trình phù hợp
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white py-12 text-center dark:border-slate-800 dark:bg-slate-900">
+          <CheckSquare className="h-9 w-9 text-[#1A56FA]" aria-hidden="true" />
+          <h2 className="mt-3 text-base font-bold text-slate-900 dark:text-slate-100">
+            Không có công việc phù hợp
           </h2>
-          <p className="mt-1 text-xs text-[#64748B] dark:text-[#94A3B8]">
-            Hãy thử tìm kiếm khác hoặc nhập dữ liệu mới từ Database
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Thử đổi bộ lọc trạng thái hoặc tạo nhanh đầu việc mới
           </p>
-          <button
-            type="button"
-            onClick={onOpenDbImportClick}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-[#E2E8F0] px-4 py-2 text-xs font-bold text-[#1A56FA] hover:bg-blue-50 dark:border-[#2E3E55] dark:text-blue-400"
-          >
-            <CloudDownload className="h-4 w-4" />
-            <span>Nhập dữ liệu từ Database</span>
-          </button>
+          <div className="mt-4 flex gap-2">
+            {(searchQuery || selectedFilter) && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSearchChange('');
+                  onFilterSelect(null);
+                }}
+                className="min-h-[44px] rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-200"
+              >
+                Xóa bộ lọc
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onCreateOrderClick}
+              className="min-h-[44px] rounded-xl bg-[#1A56FA] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1447C6]"
+            >
+              {isSupervisor ? 'Thêm việc mới' : 'Gửi đề xuất'}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
           <div className="space-y-3 lg:col-span-7" data-testid="orders-list">
-            {filteredOrders.map((order) => (
-              <OrderCard
-                key={order.id}
-                order={order}
-                isSelected={selectedOrder?.id === order.id}
-                onSelect={() => setSelectedOrderId(order.id)}
-                onTrackClick={() => {
-                  onTrackOrderClick(order.trackingNumber);
-                  onJumpToTracking();
-                }}
-              />
-            ))}
+            {filteredOrders.map((order) => {
+              const nextAction = getNextWorkflowAction(order.status);
+              const allowed = canApproveOrderStatus(currentAccount, order.status, nextAction.nextStatus);
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  isSelected={selectedOrder?.id === order.id}
+                  canQuickProgress={allowed}
+                  restrictedLabel={
+                    order.status === 'PENDING' ? 'Chờ Cấp trên duyệt' : 'Chỉ Cấp trên điều chỉnh'
+                  }
+                  onSelect={() => {
+                    setSelectedOrderId(order.id);
+                    setMobileDetailOpen(true);
+                  }}
+                  onQuickProgress={onUpdateOrderStatus}
+                />
+              );
+            })}
           </div>
 
           {selectedOrder && (
             <aside
-              aria-label="Hồ sơ chi tiết dự án"
-              className="h-fit rounded-2xl border border-[#E2E8F0] bg-white p-5 lg:sticky lg:top-5 lg:col-span-5 dark:border-[#2E3E55] dark:bg-[#151E2E]"
+              aria-label="Chi tiết xử lý nhanh"
+              className="hidden h-fit rounded-2xl border border-slate-200 bg-white p-5 lg:sticky lg:top-5 lg:col-span-5 lg:block dark:border-slate-800 dark:bg-slate-900"
             >
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-                    Hồ sơ Dự án & Nghiệp vụ
-                  </h2>
-                  <p className="text-sm font-bold text-[#1A56FA] dark:text-blue-400">
-                    {selectedOrder.trackingNumber}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <StatusBadge status={selectedOrder.status} />
-                  <button
-                    type="button"
-                    onClick={() => onDeleteOrder(selectedOrder.id)}
-                    aria-label={`Xóa dự án ${selectedOrder.trackingNumber}`}
-                    className="rounded-lg p-1.5 text-[#EF4444] transition hover:bg-red-50 dark:hover:bg-red-950/40"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="my-4 border-t border-[#E2E8F0] dark:border-[#2E3E55]" />
-
-              <div className="space-y-3 text-sm">
-                <div>
-                  <p className="text-[11px] font-medium text-[#64748B] dark:text-[#94A3B8]">
-                    Đơn vị chủ trì & Mục tiêu
-                  </p>
-                  <p className="font-semibold text-[#0F172A] dark:text-[#F8FAFC]">
-                    {selectedOrder.senderName} • {selectedOrder.senderAddress}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-[#64748B] dark:text-[#94A3B8]">
-                    Nhân sự phụ trách & Chi nhánh
-                  </p>
-                  <p className="font-semibold text-[#0F172A] dark:text-[#F8FAFC]">
-                    {selectedOrder.recipientName} • {selectedOrder.recipientAddress}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4">
-                <p className="mb-2 text-[11px] font-medium text-[#64748B] dark:text-[#94A3B8]">
-                  Phê duyệt & Cập nhật trạng thái trong Database
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {ALL_STATUSES.map((st) => {
-                    const active = selectedOrder.status === st;
-                    return (
-                      <button
-                        key={st}
-                        type="button"
-                        onClick={() => onUpdateOrderStatus(selectedOrder.id, st)}
-                        aria-pressed={active}
-                        className={`rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${
-                          active
-                            ? 'bg-[#1A56FA] text-white'
-                            : 'bg-[#F1F5F9] text-[#475569] hover:bg-slate-200 dark:bg-[#1E293B] dark:text-[#94A3B8]'
-                        }`}
-                      >
-                        {ORDER_STATUS_META[st].label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-[#F8FAFC] p-3 text-xs dark:bg-[#1E293B]">
-                <div>
-                  <p className="text-[#64748B] dark:text-[#94A3B8]">Nhóm nghiệp vụ</p>
-                  <p className="mt-0.5 font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-                    {selectedOrder.serviceType}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[#64748B] dark:text-[#94A3B8]">Định mức</p>
-                  <p className="mt-0.5 font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-                    {Math.round(selectedOrder.weightKg)} ngày công
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[#64748B] dark:text-[#94A3B8]">Ngân sách</p>
-                  <p className="mt-0.5 font-bold text-[#1A56FA] dark:text-blue-400">
-                    {formatVnd(
-                      selectedOrder.codVnd > 0 ? selectedOrder.codVnd : selectedOrder.feeVnd
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onTrackOrderClick(selectedOrder.trackingNumber);
-                  onJumpToTracking();
-                }}
-                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#1A56FA] py-2.5 text-xs font-bold text-white transition hover:bg-[#1447C6]"
-              >
-                <Briefcase className="h-4 w-4" />
-                <span>Giám sát chi nhánh & Tiến độ thực tế</span>
-              </button>
+              {renderDetailBody(selectedOrder)}
             </aside>
           )}
+        </div>
+      )}
+
+      {/* Mobile Detail Bottom Sheet */}
+      {mobileDetailOpen && selectedOrder && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-xs lg:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Chi tiết ${selectedOrder.trackingNumber}`}
+        >
+          <div className="max-h-[88vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 pb-8 shadow-2xl dark:bg-slate-900">
+            <div className="mb-2 flex items-center justify-between">
+              <div
+                aria-hidden="true"
+                className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 dark:bg-slate-700"
+              />
+              <button
+                type="button"
+                onClick={() => setMobileDetailOpen(false)}
+                aria-label="Đóng chi tiết công việc"
+                className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            {renderDetailBody(selectedOrder)}
+          </div>
         </div>
       )}
     </div>

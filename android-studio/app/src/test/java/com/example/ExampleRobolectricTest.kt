@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
-import com.example.data.local.SeedData
 import com.example.data.repository.BusinessRepository
 import com.example.model.OrderStatus
 import com.example.viewmodel.GoShipViewModel
@@ -14,7 +13,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -51,61 +49,53 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test Room database seeding and JSON import`() = runBlocking {
+    fun `test Room cache seeding status update and delete`() = runBlocking {
         repository.ensureSeeded()
         val initialOrders = repository.ordersFlow.first()
         assertEquals(5, initialOrders.size)
 
-        // Import sample JSON batch into Room database
-        val importSummary = repository.importFromJson(SeedData.SAMPLE_IMPORT_JSON)
-        assertNull(importSummary.errorMessage)
-        assertEquals(3, importSummary.ordersImported)
-        assertEquals(7, importSummary.revenuesImported)
-
-        val updatedOrders = repository.ordersFlow.first()
-        assertEquals(8, updatedOrders.size)
-        assertTrue(updatedOrders.any { it.trackingNumber == "VN-99201-HN" })
-    }
-
-    @Test
-    fun `test Room database CSV import and status update`() = runBlocking {
-        repository.ensureSeeded()
-        val csvSummary = repository.importFromCsv(SeedData.SAMPLE_IMPORT_CSV)
-        assertNull(csvSummary.errorMessage)
-        assertEquals(3, csvSummary.ordersImported)
-
-        val ordersAfterCsv = repository.ordersFlow.first()
-        assertEquals(8, ordersAfterCsv.size)
-
-        // Update project workflow status in Room DB
         repository.updateOrderStatus("ORD-001", OrderStatus.COMPLETED)
         val updatedOrder = repository.ordersFlow.first().find { it.id == "ORD-001" }
         assertNotNull(updatedOrder)
         assertEquals(OrderStatus.COMPLETED, updatedOrder?.status)
+
+        repository.deleteOrder("ORD-005")
+        val remaining = repository.ordersFlow.first()
+        assertEquals(4, remaining.size)
     }
 
     @Test
-    fun `test Business Manage workflow processes and GPS check-in`() {
+    fun `test streamlined quick task creation status progression and GPS check-in`() {
         val viewModel = GoShipViewModel()
         val initialCount = viewModel.uiState.value.orders.size
         assertFalse(viewModel.uiState.value.isCheckedInToday)
 
-        // Process 1: Create new Business Project
-        viewModel.createOrder(
-            recipientName = "Trần Thu Trang",
-            recipientAddress = "Dự án ERP Chi nhánh Miền Bắc",
-            weightKg = 10.0f,
-            paymentMethod = "TECH"
+        // Create quick task
+        viewModel.createQuickTask(
+            title = "Duyệt vật tư điểm bán Q3",
+            assignee = "Trần Thu Trang",
+            departmentCode = "OPS",
+            branchName = "Trụ sở Hà Nội",
+            budgetVnd = 5_000_000L
         )
 
-        val updatedState = viewModel.uiState.value
-        assertEquals(initialCount + 1, updatedState.orders.size)
-        assertEquals(OrderStatus.PENDING, updatedState.orders.first().status)
-        assertEquals("Trần Thu Trang", updatedState.orders.first().recipientName)
+        val afterCreate = viewModel.uiState.value
+        assertEquals(initialCount + 1, afterCreate.orders.size)
+        val created = afterCreate.orders.first()
+        assertEquals(OrderStatus.PENDING, created.status)
+        assertEquals("Trần Thu Trang", created.recipientName)
 
-        // Process 2: GPS Attendance Check-in
-        viewModel.performGpsCheckIn()
+        // 1-tap progression: PENDING -> DELIVERING -> COMPLETED
+        viewModel.advanceOrderStatus(created)
+        assertEquals(OrderStatus.DELIVERING, viewModel.uiState.value.orders.first().status)
+
+        viewModel.advanceOrderStatus(viewModel.uiState.value.orders.first())
+        assertEquals(OrderStatus.COMPLETED, viewModel.uiState.value.orders.first().status)
+
+        // GPS check-in
+        viewModel.performGpsCheckIn("Chi nhánh Đà Nẵng")
         assertTrue(viewModel.uiState.value.isCheckedInToday)
+        assertEquals("Chi nhánh Đà Nẵng", viewModel.uiState.value.activeBranch)
         assertEquals(125, viewModel.uiState.value.attendanceCount)
     }
 
@@ -117,5 +107,79 @@ class ExampleRobolectricTest {
 
         viewModel.toggleDarkMode(false)
         assertEquals(false, viewModel.uiState.value.isDarkMode)
+    }
+
+    @Test
+    fun `test daily activities csv report generation with RFC 4180 escaping`() {
+        val viewModel = GoShipViewModel()
+        viewModel.createQuickTask(
+            title = "Kiểm tra, \"kho số 1\"",
+            assignee = "Lê Minh",
+            departmentCode = "OPS",
+            branchName = "Chi nhánh Đà Nẵng"
+        )
+        viewModel.performGpsCheckIn("Chi nhánh Đà Nẵng")
+
+        val csv = viewModel.generateDailyActivitiesCsvReport(reportDate = "2026-11-14")
+        assertTrue(csv.startsWith("\uFEFF"))
+        assertTrue(csv.contains("Ngay bao cao,2026-11-14"))
+        assertTrue(csv.contains("Chi nhanh hoat dong,Chi nhánh Đà Nẵng"))
+        assertTrue(csv.contains("Quan so hien dien,125/130"))
+        assertTrue(csv.contains("\"Kiểm tra, \"\"kho số 1\"\" (Lê Minh)\""))
+    }
+
+    @Test
+    fun `test supervisor and subordinate account switching and permission guards`() {
+        val viewModel = GoShipViewModel()
+        assertEquals(com.example.model.UserRole.SUPERVISOR, viewModel.uiState.value.currentAccount.role)
+        assertTrue(viewModel.isSupervisor())
+        assertTrue(viewModel.canDeleteOrders())
+        assertTrue(viewModel.canExportEnterpriseReport())
+        assertTrue(viewModel.canApproveOrderStatus(OrderStatus.PENDING, OrderStatus.DELIVERING))
+
+        // Switch to Subordinate (Phạm Thu Thảo - ACC-SUB-01)
+        viewModel.switchAccount("ACC-SUB-01")
+        assertEquals(com.example.model.UserRole.SUBORDINATE, viewModel.uiState.value.currentAccount.role)
+        assertFalse(viewModel.isSupervisor())
+        assertFalse(viewModel.canDeleteOrders())
+        assertFalse(viewModel.canExportEnterpriseReport())
+        assertFalse(viewModel.canApproveOrderStatus(OrderStatus.PENDING, OrderStatus.DELIVERING))
+        assertTrue(viewModel.canApproveOrderStatus(OrderStatus.DELIVERING, OrderStatus.COMPLETED))
+
+        // Subordinate cannot send company notifications
+        val beforeNotifCount = viewModel.uiState.value.notifications.size
+        viewModel.sendCompanyNotification(
+            title = "Thử gửi trái phép",
+            message = "Không được phép",
+            priority = com.example.model.NotificationPriority.URGENT,
+            audience = com.example.model.NotificationAudience.ALL_STAFF
+        )
+        assertEquals(beforeNotifCount, viewModel.uiState.value.notifications.size)
+    }
+
+    @Test
+    fun `test supervisor broadcasts company notification and subordinate reads it`() {
+        val viewModel = GoShipViewModel()
+        viewModel.switchAccount("ACC-SUP-01")
+
+        viewModel.sendCompanyNotification(
+            title = "Họp giao ban khẩn 15:00",
+            message = "Tất cả nhân sự báo cáo tiến độ hiện trường.",
+            priority = com.example.model.NotificationPriority.URGENT,
+            audience = com.example.model.NotificationAudience.SUBORDINATES
+        )
+
+        // Switch to Phạm Thu Thảo (ACC-SUB-01)
+        viewModel.switchAccount("ACC-SUB-01")
+        val visibleForThao = viewModel.visibleNotifications()
+        assertEquals("Họp giao ban khẩn 15:00", visibleForThao.first().title)
+        val unreadBefore = viewModel.unreadNotificationsCount()
+        assertEquals(3, unreadBefore) // NTF-001, NTF-002, + newly sent alert
+
+        viewModel.markNotificationRead(visibleForThao.first().id)
+        assertEquals(2, viewModel.unreadNotificationsCount())
+
+        viewModel.markAllNotificationsRead()
+        assertEquals(0, viewModel.unreadNotificationsCount())
     }
 }

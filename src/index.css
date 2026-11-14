@@ -8,16 +8,8 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-}
 
-.wallet-gradient {
-  background: linear-gradient(135deg, #0F2B66 0%, #1644A8 50%, #1E60FF 100%);
-}
-
-.promo-gradient {
-  background: linear-gradient(135deg, #FFF1EB 0%, #FFEDD5 100%);
-}
-
-.dark .promo-gradient {
-  background: linear-gradient(135deg, #271B11 0%, #3B2513 100%);
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
 }

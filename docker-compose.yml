@@ -1,0 +1,25 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: business-manage-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  app:
+    build: .
+    container_name: business-manage-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: "production"
+      MONGODB_URI: "mongodb://mongo:27017/business_manage"
+    depends_on:
+      - mongo
+
+volumes:
+  mongo_data:

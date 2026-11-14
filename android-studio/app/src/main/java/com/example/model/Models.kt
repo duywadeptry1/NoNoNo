@@ -1,26 +1,78 @@
 package com.example.model
 
 enum class OrderStatus(val label: String) {
-    DELIVERING("Đang triển khai"),
-    PENDING("Chờ phê duyệt"),
-    COMPLETED("Đã nghiệm thu"),
-    CANCELLED("Tạm dừng / Quá hạn")
+    PENDING("Chờ duyệt"),
+    DELIVERING("Đang chạy"),
+    COMPLETED("Hoàn tất"),
+    CANCELLED("Tạm hoãn")
 }
+
+enum class UserRole(val label: String) {
+    SUPERVISOR("Cấp trên"),
+    SUBORDINATE("Cấp dưới")
+}
+
+data class MockAccount(
+    val id: String,
+    val name: String,
+    val role: UserRole,
+    val title: String,
+    val department: String,
+    val branchName: String
+) {
+    val initials: String
+        get() = name.trim().split(Regex("\\s+")).takeLast(2)
+            .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+            .joinToString("")
+            .ifEmpty { "NV" }
+}
+
+enum class NotificationPriority(val label: String) {
+    NORMAL("Thông thường"),
+    IMPORTANT("Quan trọng"),
+    URGENT("Khẩn cấp")
+}
+
+enum class NotificationAudience(val label: String) {
+    ALL_STAFF("Toàn công ty"),
+    SUBORDINATES("Tất cả cấp dưới"),
+    BRANCH("Theo chi nhánh"),
+    INDIVIDUAL("Cá nhân"),
+    SUPERVISORS("Ban quản lý")
+}
+
+data class CompanyNotification(
+    val id: String,
+    val title: String,
+    val message: String,
+    val priority: NotificationPriority,
+    val audience: NotificationAudience,
+    val targetBranch: String? = null,
+    val targetAccountId: String? = null,
+    val targetAccountName: String? = null,
+    val senderId: String,
+    val senderName: String,
+    val senderRole: UserRole,
+    val createdAt: String,
+    val timestampMillis: Long = System.currentTimeMillis(),
+    val readByAccountIds: List<String> = emptyList()
+)
 
 data class ShippingOrder(
     val id: String,
-    val trackingNumber: String,      // Mã dự án / Hợp đồng (e.g. PRJ-2026-01)
-    val senderName: String,          // Phòng ban phụ trách (e.g. Phòng Kinh Doanh)
-    val senderAddress: String,       // Tên dự án / Hạng mục công việc
-    val recipientName: String,       // Quản lý / Nhân sự thực hiện (Assignee)
-    val recipientAddress: String,    // Chi nhánh & Mục tiêu bàn giao
+    val trackingNumber: String,      // Mã đầu việc (e.g. FIN-88490)
+    val senderName: String,          // Phòng ban phụ trách
+    val senderAddress: String,       // Tên công việc cần xử lý
+    val recipientName: String,       // Nhân sự phụ trách
+    val recipientAddress: String,    // Chi nhánh & Ghi chú ngắn
     val status: OrderStatus,
-    val serviceType: String,         // Loại quy trình (Dự án, Hợp đồng, Ngân sách, Nhân sự)
-    val feeVnd: Long,                // Chi phí vận hành / Giải ngân thực tế (VND)
-    val codVnd: Long,                // Tổng ngân sách / Giá trị hợp đồng (VND)
-    val createdAt: String,           // Thời gian khởi tạo
-    val estimatedDelivery: String,   // Hạn chót (Deadline) / Nghiệm thu
-    val weightKg: Float              // Khối lượng công việc (Man-days) / Quy mô
+    val serviceType: String,         // Nhóm thao tác nhanh (Phê duyệt nhanh, Hiện trường, Bàn giao, Bảo trì)
+    val feeVnd: Long,
+    val codVnd: Long,                // Ngân sách dự kiến (tùy chọn)
+    val createdAt: String,
+    val estimatedDelivery: String,
+    val weightKg: Float,
+    val timestampMillis: Long = System.currentTimeMillis()
 )
 
 data class StatCardData(
@@ -31,53 +83,20 @@ data class StatCardData(
     val isPositive: Boolean
 )
 
-data class ShippingService(
+data class ActivityLogItem(
     val id: String,
-    val name: String,                // Tên Nhân sự (HR) hoặc Giải pháp / Sản phẩm
-    val description: String,         // Chức vụ, KPI & Kỹ năng hoặc Thông số tồn kho
-    val basePriceVnd: Long,          // Mức lương / Định mức hoặc Đơn giá (VND)
-    val deliveryTime: String,        // Phòng ban / Trạng thái sẵn sàng
-    val popularTag: String? = null   // Nhãn nổi bật (Xuất sắc, Chủ chốt, Bán chạy)
-)
-
-data class DailyRevenue(
-    val dayLabel: String,
-    val amountVnd: Long,
-    val orderCount: Int,
-    val isPeak: Boolean = false
-)
-
-data class PaymentMethodShare(
-    val name: String,
-    val percentage: Int,
-    val totalVnd: Long
-)
-
-data class CourierDriver(
-    val name: String,                // Giám đốc Chi nhánh / Quản lý ca trực
-    val phone: String,
-    val licensePlate: String,        // Mã văn phòng & Quân số điểm danh
-    val vehicleModel: String,        // Tên Chi nhánh / Trụ sở
-    val rating: Float,               // Điểm hiệu suất KPI chi nhánh
-    val completedTrips: Int,         // Số dự án hoàn tất
-    val currentDistanceKm: Float,    // Khoảng cách GPS tới văn phòng (km)
-    val etaMinutes: Int              // Số nhân sự vừa chấm công trong 15 phút qua
-)
-
-data class TrackingStep(
+    val type: String, // CHECK_IN, ORDER_CREATED, STATUS_UPDATED, NOTIFICATION_SENT, SYSTEM
     val title: String,
     val description: String,
     val timestamp: String,
-    val isDone: Boolean,
-    val isCurrent: Boolean
+    val timestampMillis: Long = System.currentTimeMillis()
 )
 
-data class ScheduleDayItem(
-    val dayOfWeek: String,
-    val dayNumber: String,
-    val meetingTitle: String,
-    val department: String,
-    val timeSlot: String,
-    val roomOrLocation: String,
-    val statusBadge: String
+data class RemoteWorkspaceSnapshot(
+    val orders: List<ShippingOrder>,
+    val activities: List<ActivityLogItem>,
+    val isCheckedInToday: Boolean,
+    val attendanceCount: Int,
+    val activeBranch: String,
+    val databaseMode: String
 )

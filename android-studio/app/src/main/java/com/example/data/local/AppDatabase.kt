@@ -6,18 +6,10 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.data.local.dao.BusinessDao
 import com.example.data.local.entity.OrderEntity
-import com.example.data.local.entity.PaymentShareEntity
-import com.example.data.local.entity.RevenueEntity
-import com.example.data.local.entity.ServiceEntity
 
 @Database(
-    entities = [
-        OrderEntity::class,
-        ServiceEntity::class,
-        RevenueEntity::class,
-        PaymentShareEntity::class
-    ],
-    version = 2,
+    entities = [OrderEntity::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
