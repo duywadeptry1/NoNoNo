@@ -1,0 +1,6 @@
+{
+  "name": "Business Manage",
+  "description": "Enterprise operations, project workflows, HR directory, branch GPS check-in, and financial analytics with cross-platform Web, Express API, Capacitor, and Android Studio configurations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

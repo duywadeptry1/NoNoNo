@@ -1,0 +1,17 @@
+{
+  "name": "Business Manage",
+  "short_name": "BusinessManage",
+  "description": "Enterprise operations, project workflows, HR directory, branch GPS check-in, and financial analytics.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#1A56FA",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

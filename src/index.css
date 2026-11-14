@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.wallet-gradient {
+  background: linear-gradient(135deg, #0F2B66 0%, #1644A8 50%, #1E60FF 100%);
+}
+
+.promo-gradient {
+  background: linear-gradient(135deg, #FFF1EB 0%, #FFEDD5 100%);
+}
+
+.dark .promo-gradient {
+  background: linear-gradient(135deg, #271B11 0%, #3B2513 100%);
+}

@@ -1,0 +1,6 @@
+# Android Studio local SDK configuration template
+# Android Studio generates local.properties automatically on sync.
+# Uncomment and adjust if building from CLI without Android Studio:
+# macOS: sdk.dir=/Users/<USER>/Library/Android/sdk
+# Linux: sdk.dir=/home/<USER>/Android/Sdk
+# Windows: sdk.dir=C:\\Users\\<USER>\\AppData\\Local\\Android\\Sdk

@@ -1,0 +1,18 @@
+{
+  "appId": "com.aistudio.goship.vqml",
+  "appName": "Business Manage",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  },
+  "ios": {
+    "contentInset": "automatic"
+  }
+}

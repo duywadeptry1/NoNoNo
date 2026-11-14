@@ -1,0 +1,20 @@
+{
+  "name": "goship-api",
+  "version": "1.0.0",
+  "description": "GoShip & Business Manage Backend API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "mongoose": "^8.15.0"
+  }
+}
